@@ -63,6 +63,26 @@ export async function processSpotifyData(file: File, onProgress: (step: string) 
     );
   }
   
+  // Controlla se i file JSON contengono dati di streaming history
+  // I file possono avere nomi come:
+  // - StreamingHistory_music_*.json (formato vecchio)
+  // - Streaming_History_Audio_*.json (formato nuovo)
+  // - Streaming_History_Video_*.json (video streaming)
+  const hasStreamingHistoryFiles = filenames.some(fn => 
+    fn.includes('StreamingHistory') || 
+    fn.includes('streaming_history') ||
+    fn.includes('Streaming_History_Audio') ||
+    fn.includes('Streaming_History_Video')
+  );
+  
+  if (!hasStreamingHistoryFiles) {
+    throw new Error(
+      'Error: Nessun file di streaming history trovato nello zip. ' +
+      'Assicurati di caricare il file ZIP che contiene i file di streaming history ' +
+      'dalla sezione "Extended streaming history" di Spotify.'
+    );
+  }
+  
   onProgress('4/9: reading json files in zip');
   await pyodide.runPythonAsync(`
     from io import StringIO
@@ -71,12 +91,87 @@ export async function processSpotifyData(file: File, onProgress: (step: string) 
     zip_ref = zipfile.ZipFile(BytesIO(bytes(list(data))), "r")
     df_list = []
     for i, name in enumerate(filenames):
-        df_list.append(read_json(StringIO(zip_ref.read(name).decode("utf-8"))))
+        try:
+            df_temp = read_json(StringIO(zip_ref.read(name).decode("utf-8")))
+            # Aggiungi solo DataFrame non vuoti e con le colonne essenziali per streaming history
+            # Le colonne essenziali sono: 'track' (o 'master_metadata_track_name' o 'trackName') e 'ts' (o 'endTime')
+            has_track_col = ("track" in df_temp.columns or 
+                           "master_metadata_track_name" in df_temp.columns or
+                           "trackName" in df_temp.columns)
+            has_ts_col = ("ts" in df_temp.columns or 
+                         "endTime" in df_temp.columns)
+            
+            # Escludi file che sembrano essere dati di account (hanno colonne come email, birthdate, etc.)
+            account_cols = ['email', 'birthdate', 'gender', 'identifierType', 'identifierValue']
+            has_account_data = any(col in df_temp.columns for col in account_cols)
+            
+            if not df_temp.empty and has_track_col and has_ts_col and not has_account_data:
+                df_list.append(df_temp)
+            elif has_account_data:
+                print(f"Saltato {name}: sembra contenere dati di account invece di streaming history")
+        except Exception as e:
+            # Salta i file che causano errori
+            print(f"Errore nel leggere {name}: {e}")
+            continue
     zip_ref.close()
   `);
   
   onProgress('5/9: creating database');
-  await pyodide.runPythonAsync('df = pd.concat(df_list)');
+  await pyodide.runPythonAsync(`
+    if len(df_list) == 0:
+        raise ValueError("Nessun file JSON valido trovato nello zip. Assicurati che i file contengano dati di streaming history.")
+    
+    # Verifica che tutti i DataFrame abbiano almeno le colonne essenziali
+    required_cols = ['track', 'ts']
+    for i, df_temp in enumerate(df_list):
+        missing_cols = [col for col in required_cols if col not in df_temp.columns]
+        if missing_cols:
+            print(f"Avviso: DataFrame {i} manca delle colonne: {missing_cols}")
+    
+    df = pd.concat(df_list, ignore_index=True)
+    
+    # Verifica che dopo la concatenazione le colonne essenziali esistano
+    if df.empty:
+        raise ValueError("Il DataFrame concatenato è vuoto. Verifica che i file JSON contengano dati validi.")
+    
+    missing_cols = [col for col in required_cols if col not in df.columns]
+    if missing_cols:
+        # Controlla se ci sono colonne che suggeriscono dati di account invece di streaming history
+        account_cols = ['email', 'birthdate', 'gender', 'identifierType', 'identifierValue', 
+                       'displayName', 'firstName', 'lastName', 'country', 'postalCode']
+        has_account_data = any(col in df.columns for col in account_cols)
+        
+        if has_account_data:
+            raise ValueError(
+                "ERRORE: Sembra che tu abbia caricato dati di account invece della streaming history. " +
+                "Le colonne disponibili includono dati personali (email, birthdate, gender, etc.) " +
+                "ma mancano le colonne necessarie per lo streaming history (ts, master_metadata_track_name, etc.). " +
+                "Assicurati di scaricare e caricare il file ZIP dalla sezione 'Extended streaming history' di Spotify, " +
+                "non dalla sezione 'Account data'."
+            )
+        else:
+            raise ValueError(
+                f"Colonne essenziali mancanti dopo concatenazione: {missing_cols}. " +
+                f"Colonne disponibili: {list(df.columns)[:20]}..." + 
+                "(mostrate solo le prime 20 colonne)"
+            )
+    
+    # Pulizia aggiuntiva dopo concatenazione: converti eventuali valori complessi residui
+    import json
+    for col in df.columns:
+        if df[col].dtype == 'object':
+            def convert_complex(x):
+                import pandas as pd
+                if pd.isna(x):
+                    return x
+                if isinstance(x, (dict, list)):
+                    try:
+                        return json.dumps(x)
+                    except:
+                        return str(x)
+                return x
+            df[col] = df[col].apply(convert_complex)
+  `);
   
   onProgress('6/9: preprocessing data');
   await pyodide.runPythonAsync(`

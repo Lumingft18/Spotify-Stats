@@ -10,7 +10,43 @@ import pandas as pd
 
 def read_json(path_or_buf):
     # Leggi il JSON senza specificare dtype per campi opzionali
-    df = pd.read_json(path_or_buf)
+    # Gestisci il caso in cui il JSON potrebbe essere un array di oggetti o un singolo oggetto
+    import json
+    
+    # Leggi il contenuto del JSON
+    if hasattr(path_or_buf, 'read'):
+        content = path_or_buf.read()
+        path_or_buf.seek(0)  # Reset per eventuali letture successive
+    else:
+        content = path_or_buf
+    
+    # Parse il JSON
+    try:
+        data = json.loads(content)
+    except (json.JSONDecodeError, TypeError):
+        # Se non è una stringa JSON, prova direttamente con pandas
+        df = pd.read_json(path_or_buf, orient='records')
+    else:
+        # Controlla il tipo di dato
+        if isinstance(data, list):
+            # È un array di oggetti (formato standard Spotify)
+            df = pd.DataFrame(data)
+        elif isinstance(data, dict):
+            # È un dizionario
+            # Controlla se tutti i valori sono scalari (non liste/dict)
+            if all(not isinstance(v, (list, dict)) for v in data.values()):
+                # Tutti valori scalari, crea DataFrame con una riga
+                df = pd.DataFrame([data])
+            else:
+                # Ha valori complessi, prova con orient='index'
+                try:
+                    df = pd.read_json(content, orient='index')
+                except ValueError:
+                    # Se fallisce, prova come records
+                    df = pd.read_json(content, orient='records')
+        else:
+            # Tipo non riconosciuto, prova direttamente con pandas
+            df = pd.read_json(content, orient='records')
     
     # Aggiungi campi opzionali se non esistono
     if "username" not in df.columns:
@@ -23,15 +59,20 @@ def read_json(path_or_buf):
     # Converti i tipi di dato per i campi esistenti
     dtype_map = {
         "ts": str,
+        "endTime": str,  # Nuovo formato
         "username": str,
         "platform": str,
         "ms_played": np.int64,
+        "msPlayed": np.int64,  # Nuovo formato
         "conn_country": str,
         "ip_addr_decrypted": str,
         "user_agent_decrypted": str,
         "master_metadata_track_name": str,
         "master_metadata_album_artist_name": str,
         "master_metadata_album_album_name": str,
+        "trackName": str,  # Nuovo formato
+        "artistName": str,  # Nuovo formato
+        "albumName": str,  # Nuovo formato
         "spotify_track_uri": str,
         "episode_name": str,
         "episode_show_name": str,
@@ -66,20 +107,160 @@ def read_json(path_or_buf):
             "master_metadata_track_name": "track",
             "master_metadata_album_artist_name": "artist",
             "master_metadata_album_album_name": "album",
+            # Supporta anche i nuovi formati
+            "trackName": "track",
+            "artistName": "artist",
+            "albumName": "album",
+            "endTime": "ts",
+            "msPlayed": "ms_played",  # Nuovo formato
         }
     )
+    
+    # Assicurati che le colonne track, artist, album esistano sempre
+    # (potrebbero non esistere se il JSON non le contiene)
+    if "track" not in df.columns:
+        df["track"] = None
+    if "artist" not in df.columns:
+        df["artist"] = None
+    if "album" not in df.columns:
+        df["album"] = None
+    
+    # Converti tutti i valori complessi (dict, list) in stringhe JSON
+    # Questo evita errori quando si chiama drop_duplicates() su colonne con valori non hashable
+    if not df.empty:
+        for col in df.columns:
+            if df[col].dtype == 'object':
+                # Converti tutti i valori complessi in stringhe JSON
+                def check_and_convert(x):
+                    if pd.isna(x):
+                        return x
+                    if isinstance(x, (dict, list)):
+                        try:
+                            return json.dumps(x)
+                        except (TypeError, ValueError):
+                            return str(x)
+                    # Se è già una stringa che rappresenta JSON, lasciala così
+                    return x
+                
+                # Applica la conversione a tutti i valori
+                df[col] = df[col].apply(check_and_convert)
+    
+    # Se il DataFrame è vuoto, assicurati che abbia almeno le colonne essenziali
+    if df.empty:
+        # Crea un DataFrame vuoto con le colonne necessarie
+        required_columns = [
+            "track", "artist", "album", "ts", "ms_played", "conn_country", 
+            "platform", "reason_start", "reason_end", "shuffle", "offline", 
+            "offline_timestamp", "incognito_mode", "spotify_track_uri",
+            "username", "user_agent_decrypted", "skipped"
+        ]
+        df = pd.DataFrame(columns=required_columns)
+    
     return df
 
 
 def preprocess_df(df):
+    # Verifica che il DataFrame non sia vuoto e abbia le colonne necessarie
+    if df.empty:
+        # Restituisci un DataFrame vuoto con le colonne necessarie
+        return pd.DataFrame(columns=[
+            "track", "artist", "album", "year_month_day", "day_name",
+            "minutes_played", "reason_start", "reason_end", "conn_country",
+            "platform", "shuffle", "full_play", "offline", "incognito_mode",
+            "ts", "year", "year_month", "month", "month_index", "ms_played",
+            "hours_played", "spotify_track_uri"
+        ])
+    
+    # Verifica che la colonna track esista
+    if "track" not in df.columns:
+        raise ValueError("Il DataFrame deve contenere la colonna 'track'. Colonne disponibili: " + str(list(df.columns)))
+    
+    # Verifica che la colonna ts esista (necessaria per il processing)
+    if "ts" not in df.columns:
+        raise ValueError(f"Colonna 'ts' mancante nel DataFrame. Colonne disponibili: {list(df.columns)}")
+    
     df = df[df["track"] != "None"]
+    
+    # Se dopo il filtro il DataFrame è vuoto, restituisci un DataFrame vuoto con le colonne corrette
+    if df.empty:
+        return pd.DataFrame(columns=[
+            "track", "artist", "album", "year_month_day", "day_name",
+            "minutes_played", "reason_start", "reason_end", "conn_country",
+            "platform", "shuffle", "full_play", "offline", "incognito_mode",
+            "ts", "year", "year_month", "month", "month_index", "ms_played",
+            "hours_played", "spotify_track_uri"
+        ])
+    
+    # Converti DIRETTAMENTE tutte le colonne object in stringhe prima di drop_duplicates()
+    # Questo è l'unico modo sicuro per evitare errori con valori non hashable (dict, list)
+    # Salviamo i tipi originali delle colonne importanti che dobbiamo riconvertire dopo
+    important_cols = {
+        'ts': 'datetime',
+        'ms_played': 'int64',
+        'offline_timestamp': 'int64',
+        'shuffle': 'bool',
+        'skipped': 'bool',
+        'offline': 'bool',
+        'incognito_mode': 'bool'
+    }
+    
+    # Converti tutte le colonne object in stringhe
+    for col in df.columns:
+        if df[col].dtype == 'object':
+            df[col] = df[col].astype(str)
+    
+    # Ora possiamo rimuovere i duplicati in sicurezza
     df = df.drop_duplicates()
+    
+    # Verifica che dopo drop_duplicates le colonne essenziali esistano ancora
+    if df.empty:
+        return pd.DataFrame(columns=[
+            "track", "artist", "album", "year_month_day", "day_name",
+            "minutes_played", "reason_start", "reason_end", "conn_country",
+            "platform", "shuffle", "full_play", "offline", "incognito_mode",
+            "ts", "year", "year_month", "month", "month_index", "ms_played",
+            "hours_played", "spotify_track_uri"
+        ])
+    
+    if "ts" not in df.columns:
+        raise ValueError(f"Colonna 'ts' persa dopo drop_duplicates(). Colonne disponibili: {list(df.columns)}")
+    
+    # Riconverti le colonne importanti ai loro tipi originali (se esistono)
+    # Nota: ts verrà riconvertito più avanti con pd.to_datetime
+    for col, dtype in important_cols.items():
+        if col in df.columns:
+            if dtype == 'int64':
+                df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).astype('int64')
+            elif dtype == 'bool':
+                # Per i boolean, converti da stringa a boolean
+                # Gestisci i casi comuni: 'True', 'False', 'true', 'false', 'nan', 'None', etc.
+                def str_to_bool(x):
+                    if pd.isna(x) or x in ['nan', 'None', '']:
+                        return False
+                    if isinstance(x, str):
+                        x_lower = x.lower()
+                        if x_lower in ['true', '1', 'yes']:
+                            return True
+                        elif x_lower in ['false', '0', 'no']:
+                            return False
+                    return bool(x)
+                df[col] = df[col].apply(str_to_bool).astype(bool)
 
-    df["ts"] = pd.to_datetime(df["ts"], format="%Y-%m-%dT%H:%M:%SZ")
-    df.loc[df["offline_timestamp"] > 2000000000, "offline_timestamp"] /= 1000
-    mask = df["offline_timestamp"] > 100
-    df["offline_timestamp"] = pd.to_datetime(df["offline_timestamp"], unit="s")
-    df["ts"].values[mask] = df.loc[mask, "offline_timestamp"]
+    # Verifica che le colonne necessarie esistano prima di processarle
+    if "ts" not in df.columns:
+        raise ValueError(f"Colonna 'ts' mancante nel DataFrame. Colonne disponibili: {list(df.columns)}")
+    
+    if df.empty:
+        return df
+    
+    df["ts"] = pd.to_datetime(df["ts"], format="%Y-%m-%dT%H:%M:%SZ", errors='coerce')
+    
+    # Gestisci offline_timestamp solo se esiste
+    if "offline_timestamp" in df.columns:
+        df.loc[df["offline_timestamp"] > 2000000000, "offline_timestamp"] /= 1000
+        mask = df["offline_timestamp"] > 100
+        df["offline_timestamp"] = pd.to_datetime(df["offline_timestamp"], unit="s", errors='coerce')
+        df["ts"].values[mask] = df.loc[mask, "offline_timestamp"]
 
     df["year_month"] = df["ts"].dt.to_period("M")
     df["year"] = df["ts"].dt.year
