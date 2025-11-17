@@ -454,11 +454,11 @@ export async function startAIMoodAnalysis(
         # Calcola/aggiorna il mood usando il classificatore v2
         if 'valence' in df.columns:
             if 'energy' in df.columns:
-                # Usa classify_mood_v2 con valence ed energy
-                df['mood'] = df.apply(lambda row: classify_mood_v2(row['valence'], row['energy']), axis=1)
+                # Usa classify_mood con valence ed energy
+                df['mood'] = df.apply(lambda row: classify_mood(row['valence'], row['energy']), axis=1)
             else:
-                # Fallback: usa classify_mood_v2 solo con valence (userà il fallback interno)
-                df['mood'] = df['valence'].apply(lambda v: classify_mood_v2(v, None))
+                # Fallback: usa classify_mood solo con valence (userà il fallback interno)
+                df['mood'] = df['valence'].apply(lambda v: classify_mood(v, None))
         else:
             df['mood'] = None
 
@@ -735,5 +735,146 @@ export async function filterDataByPeriod(
   }
 
   return { dataCache };
+}
+
+/**
+ * Applica i risultati mood salvati localmente al DataFrame principale e genera i grafici
+ */
+export async function applyLocalMoodResultsToDataFrame(
+  pyodide: PyodideInterface,
+  onProgress?: (step: string) => void
+): Promise<any> {
+  onProgress?.('Caricamento risultati mood salvati...');
+  
+  // Carica i risultati dell'analisi mood salvati
+  const savedResults = await getSavedMoodResults();
+  if (savedResults.size === 0) {
+    throw new Error('Nessun risultato mood salvato trovato');
+  }
+  
+  console.log(`[applyLocalMoodResultsToDataFrame] Caricati ${savedResults.size} risultati mood salvati`);
+  
+  // Carica i track per ottenere le chiavi
+  const tracksStr = localStorage.getItem('pending_audio_features_tracks');
+  if (!tracksStr) {
+    throw new Error('Nessun track disponibile per applicare i risultati mood');
+  }
+  
+  const tracks = JSON.parse(tracksStr) as Array<{ key: string; artist_clean: string; track_clean: string }>;
+  
+  onProgress?.('Preparazione dati per Python...');
+  
+  // Prepara i dati per Python solo per i track che hanno risultati salvati
+  const featuresArray = tracks
+    .filter(t => savedResults.has(t.key))
+    .map(t => {
+      const result = savedResults.get(t.key)!;
+      return {
+        key: t.key,
+        valence: result.valence,
+        energy: result.energy !== undefined ? result.energy : null,
+        danceability: result.danceability !== undefined ? result.danceability : null,
+        tempo: null,
+      };
+    });
+  
+  if (featuresArray.length === 0) {
+    throw new Error('Nessun risultato mood da applicare');
+  }
+  
+  const featuresForPython = featuresArray.map(f => {
+    const row: any = {
+      key: f.key,
+      valence: f.valence,
+    };
+    row.energy = f.energy !== null && f.energy !== undefined ? f.energy : null;
+    row.danceability = f.danceability !== null && f.danceability !== undefined ? f.danceability : null;
+    row.tempo = null;
+    return row;
+  });
+  
+  const featuresJson = JSON.stringify(featuresForPython);
+  
+  onProgress?.('Applicazione risultati al DataFrame...');
+  
+  pyodide.globals.set('audio_features_json', featuresJson);
+  await pyodide.runPythonAsync(`
+    import pandas as pd
+    import numpy as np
+    import json
+    
+    # Converti il JSON in una lista Python
+    audio_features_data = json.loads(audio_features_json)
+    
+    # Crea il DataFrame dalla lista di dizionari
+    features_df = pd.DataFrame(audio_features_data)
+    
+    # Converti le colonne numeriche, sostituendo None/null con NaN
+    for col in ['valence', 'energy', 'danceability', 'tempo']:
+        if col in features_df.columns:
+            features_df[col] = pd.to_numeric(features_df[col], errors='coerce')
+    
+    # Rimuovi eventuali righe duplicate per chiave
+    features_df = features_df.drop_duplicates(subset=['key'], keep='first')
+
+    # Rimuovi vecchie colonne per evitare duplicati
+    cols_to_drop = [col for col in ['valence', 'energy', 'danceability', 'tempo', 'mood'] if col in df.columns]
+    if cols_to_drop:
+        df = df.drop(columns=cols_to_drop)
+
+    # Crea la chiave anche nel DataFrame principale
+    split_track = df['track'].str.split('~~sep~~', n=1, expand=True)
+    df['track_clean'] = split_track[0]
+    df['artist_clean'] = split_track[1].fillna(df['artist'])
+    df['key'] = df['track_clean'] + '|||' + df['artist_clean']
+    df = df.merge(features_df[['key', 'valence', 'energy', 'danceability', 'tempo']], on='key', how='left')
+    df = df.drop(columns=['key', 'track_clean', 'artist_clean'])
+
+    # Calcola/aggiorna il mood usando il classificatore
+    if 'valence' in df.columns:
+        if 'energy' in df.columns:
+            # Usa classify_mood con valence ed energy
+            df['mood'] = df.apply(lambda row: classify_mood(row['valence'], row['energy']), axis=1)
+        else:
+            # Fallback: usa classify_mood solo con valence
+            df['mood'] = df['valence'].apply(lambda v: classify_mood(v, None))
+    else:
+        df['mood'] = None
+
+    original_df = df.copy()
+    
+    # Ricalcola le statistiche con le nuove features
+    df_dict = get_df_dict(df, top_k)
+    post_process_dataframe_dict(df_dict)
+    single_values = get_single_values(df, df_dict)
+    df_dict_to_df_json_dict(df_dict)
+  `);
+  
+  onProgress?.('Salvataggio dati aggiornati...');
+  
+  // Aggiorna i dati nella cache
+  const returns = await pyodide.runPythonAsync(`
+    {"df_dict": df_dict, "single_values": single_values}
+  `);
+  
+  const dfDict = returns.get('df_dict').toJs();
+  const singleValues = returns.get('single_values').toJs();
+  
+  const updatedDataCache: any = {};
+  for (const [k, v] of Object.entries(dfDict)) {
+    updatedDataCache[k] = v;
+  }
+  updatedDataCache['basics_dict'] = singleValues;
+  
+  // Salva i dati aggiornati
+  const { saveDataToStorage } = await import('./storage');
+  saveDataToStorage(updatedDataCache);
+  
+  // Triggera un evento custom per notificare l'aggiornamento
+  window.dispatchEvent(new CustomEvent('audioFeaturesUpdated', { 
+    detail: { dataCache: updatedDataCache } 
+  }));
+  
+  return { dataCache: updatedDataCache };
 }
 

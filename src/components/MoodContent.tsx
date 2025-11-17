@@ -1,9 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import type { DataFrameData, MoodAnalysisResult } from '../types';
 import type { PeriodType } from './PeriodFilter';
 import { DataTable } from './DataTable';
 import { MultiLinePlot } from './MultiLinePlot';
-import { getPyodide, startAIMoodAnalysis } from '../utils/pyodide';
+import { getPyodide, startAIMoodAnalysis, applyLocalMoodResultsToDataFrame } from '../utils/pyodide';
 import { cancelMoodAnalysis, isCancelled } from '../utils/openrouter';
 import { loadMoodResultsFromIndexedDB } from '../utils/storage';
 import { get_mood } from '../utils/moodClassifier';
@@ -748,56 +748,57 @@ export function MoodContent({ dataCache, currentPeriod }: MoodContentProps) {
     }
   }, [dataCache]);
 
-  // Carica le statistiche avanzate quando ci sono dati disponibili
-  useEffect(() => {
-    const loadAdvancedStats = async () => {
-      const savedCount = getSavedMoodResultsCount();
-      console.log('[MoodContent] Caricamento statistiche avanzate:', {
-        savedCount,
-        currentPeriod,
-        hasDataCache: !!dataCache,
-        dataCacheKeys: dataCache ? Object.keys(dataCache) : []
-      });
+  // Funzione per caricare le statistiche avanzate dai dati locali
+  const loadAdvancedStatsFromLocal = useCallback(async () => {
+    const savedCount = getSavedMoodResultsCount();
+    console.log('[MoodContent] Caricamento statistiche avanzate:', {
+      savedCount,
+      currentPeriod,
+      hasDataCache: !!dataCache,
+      dataCacheKeys: dataCache ? Object.keys(dataCache) : []
+    });
 
-      if (savedCount > 0) {
-        setIsLoadingAdvancedStats(true);
-        try {
-          const allResults = await loadAllMoodResults();
-          console.log('[MoodContent] Risultati caricati:', allResults.length);
+    if (savedCount > 0) {
+      setIsLoadingAdvancedStats(true);
+      try {
+        const allResults = await loadAllMoodResults();
+        console.log('[MoodContent] Risultati caricati:', allResults.length);
 
-          if (allResults.length > 0) {
-            // Filtra i risultati in base al periodo corrente
-            const filteredResults = filterMoodResultsByPeriod(allResults, dataCache, currentPeriod);
-            console.log('[MoodContent] Risultati filtrati per periodo:', {
-              total: allResults.length,
-              filtered: filteredResults.length,
-              period: currentPeriod
-            });
+        if (allResults.length > 0) {
+          // Filtra i risultati in base al periodo corrente
+          const filteredResults = filterMoodResultsByPeriod(allResults, dataCache, currentPeriod);
+          console.log('[MoodContent] Risultati filtrati per periodo:', {
+            total: allResults.length,
+            filtered: filteredResults.length,
+            period: currentPeriod
+          });
 
-            const stats = calculateAdvancedStats(filteredResults);
-            setAdvancedStats(stats);
-            console.log('[MoodContent] Statistiche avanzate aggiornate:', {
-              totalTracks: stats.overallStats.totalTracks,
-              topHappiest: stats.topHappiest.length,
-              topSaddest: stats.topSaddest.length
-            });
-          } else {
-            setAdvancedStats(null);
-          }
-        } catch (error) {
-          console.error('[MoodContent] Errore nel caricare le statistiche avanzate:', error);
+          const stats = calculateAdvancedStats(filteredResults);
+          setAdvancedStats(stats);
+          console.log('[MoodContent] Statistiche avanzate aggiornate:', {
+            totalTracks: stats.overallStats.totalTracks,
+            topHappiest: stats.topHappiest.length,
+            topSaddest: stats.topSaddest.length
+          });
+        } else {
           setAdvancedStats(null);
-        } finally {
-          setIsLoadingAdvancedStats(false);
         }
-      } else {
+      } catch (error) {
+        console.error('[MoodContent] Errore nel caricare le statistiche avanzate:', error);
         setAdvancedStats(null);
+      } finally {
         setIsLoadingAdvancedStats(false);
       }
-    };
+    } else {
+      setAdvancedStats(null);
+      setIsLoadingAdvancedStats(false);
+    }
+  }, [dataCache, currentPeriod]);
 
-    loadAdvancedStats();
-  }, [hasCompletedAnalysis, currentPeriod, dataCache]);
+  // Carica le statistiche avanzate quando ci sono dati disponibili
+  useEffect(() => {
+    loadAdvancedStatsFromLocal();
+  }, [hasCompletedAnalysis, loadAdvancedStatsFromLocal]);
 
   // Controlla il progresso delle audio features
   useEffect(() => {
@@ -1236,8 +1237,9 @@ export function MoodContent({ dataCache, currentPeriod }: MoodContentProps) {
         </div>
       )}
       
-      {/* Se non ci sono dati sul mood, mostra i box di input */}
-      {!moodDistribution && !moodPerWeek && !moodPerMonth && !moodPerDayOfWeek && (
+      {/* Se non ci sono dati sul mood nel dataCache, mostra il box di input solo se non ci sono statistiche avanzate */}
+      {!moodDistribution && !moodPerWeek && !moodPerMonth && !moodPerDayOfWeek && 
+       (!advancedStats || advancedStats.overallStats.totalTracks === 0) && (
         <div className="bg-gradient-to-br from-yellow-900/30 to-orange-900/30 border border-yellow-700/50 rounded-xl p-6">
           <div className="flex items-start gap-3">
             <span className="text-2xl">⚠️</span>
@@ -1271,6 +1273,88 @@ export function MoodContent({ dataCache, currentPeriod }: MoodContentProps) {
                   Carica i tuoi dati Spotify per abilitare l'analisi del mood. Una volta caricati i dati, potrai avviare l'analisi AI inserendo la tua OpenRouter API key.
                 </p>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Messaggio informativo sui grafici temporali se ci sono statistiche avanzate ma non grafici */}
+      {advancedStats && advancedStats.overallStats.totalTracks > 0 && 
+       !moodDistribution && !moodPerWeek && !moodPerMonth && !moodPerDayOfWeek && (
+        <div className="bg-gradient-to-br from-blue-900/30 to-indigo-900/30 border border-blue-700/50 rounded-xl p-4">
+          <div className="flex items-start gap-3">
+            <span className="text-xl">ℹ️</span>
+            <div className="flex-1">
+              <h3 className="text-blue-200 font-semibold mb-2">Grafici temporali non disponibili</h3>
+              <p className="text-blue-300 text-sm mb-3">
+                I grafici temporali (mood per settimana/giorno/mese) richiedono che i dati siano applicati tramite Pyodide. 
+                Le statistiche avanzate mostrate di seguito sono calcolate dai dati locali salvati.
+              </p>
+              <button
+                onClick={async () => {
+                  try {
+                    setIsLoadingAdvancedStats(true);
+                    let pyodide = getPyodide();
+                    
+                    // Se Pyodide non è disponibile, prova a ricaricare il file salvato
+                    if (!pyodide) {
+                      console.log('[MoodContent] Pyodide non disponibile, tentativo di ricaricare il file salvato...');
+                      const { loadFileFromStorage } = await import('../utils/storage');
+                      const savedFile = await loadFileFromStorage();
+                      
+                      if (!savedFile) {
+                        alert(
+                          'Pyodide non disponibile e nessun file salvato trovato.\n\n' +
+                          'Per generare i grafici temporali, devi prima caricare i tuoi dati Spotify.\n' +
+                          'Vai alla sezione di caricamento file e carica il tuo file ZIP di Spotify.'
+                        );
+                        setIsLoadingAdvancedStats(false);
+                        return;
+                      }
+                      
+                      console.log('[MoodContent] File trovato, ricarico i dati...');
+                      
+                      // Ricarica i dati dal file salvato
+                      const { processSpotifyData } = await import('../utils/pyodide');
+                      const result = await processSpotifyData(savedFile, (step) => {
+                        console.log('[MoodContent] Ricaricamento:', step);
+                      });
+                      
+                      pyodide = result.pyodide;
+                      console.log('[MoodContent] Pyodide inizializzato e dati ricaricati con successo');
+                    }
+                    
+                    if (!pyodide) {
+                      throw new Error('Pyodide non disponibile dopo il tentativo di ricarica');
+                    }
+                    
+                    await applyLocalMoodResultsToDataFrame(pyodide, (step) => {
+                      console.log('[MoodContent] Applicazione dati:', step);
+                    });
+                    // I dati verranno aggiornati automaticamente tramite l'evento audioFeaturesUpdated
+                  } catch (error: any) {
+                    console.error('[MoodContent] Errore nell\'applicare i dati:', error);
+                    alert(`Errore: ${error.message || 'Errore durante l\'applicazione dei dati'}`);
+                  } finally {
+                    setIsLoadingAdvancedStats(false);
+                  }
+                }}
+                disabled={isLoadingAdvancedStats}
+                className="bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-semibold py-2 px-4 rounded-lg transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                title="Applica i dati locali al DataFrame per generare i grafici temporali"
+              >
+                {isLoadingAdvancedStats ? (
+                  <>
+                    <div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent"></div>
+                    <span>Applicazione dati...</span>
+                  </>
+                ) : (
+                  <>
+                    <span>🔄</span>
+                    <span>Genera grafici temporali</span>
+                  </>
+                )}
+              </button>
             </div>
           </div>
         </div>
