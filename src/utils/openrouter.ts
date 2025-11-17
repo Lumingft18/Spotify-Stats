@@ -1,6 +1,7 @@
 import OpenAI from 'openai';
 import type { MoodAnalysisResult } from '../types';
 import { saveMoodResultsToIndexedDB, saveMoodResultsMeta } from './storage';
+import { get_mood } from './moodClassifier';
 
 export interface OpenRouterConfig {
   apiKey: string;
@@ -66,12 +67,17 @@ async function analyzeMoodBatch(
   }
   const prompt = `Analizza il mood delle seguenti canzoni e fornisci un giudizio matematico per ciascuna.
 
-Per ogni canzone, devi restituire un JSON con i seguenti campi:
+Per ogni canzone, devi restituire un JSON con i seguenti campi (TUTTI i campi devono essere presenti, usa null se non puoi calcolarli):
 - valence: un numero da 0.0 a 1.0 dove 0.0 = molto triste/malinconico, 1.0 = molto felice/allegro
-- energy: un numero da 0.0 a 1.0 dove 0.0 = molto calma/rilassante, 1.0 = molto energica/intensa (opzionale)
-- danceability: un numero da 0.0 a 1.0 dove 0.0 = non ballabile, 1.0 = molto ballabile (opzionale)
-- mood_category: una categoria tra "felice", "neutrale", "triste" basata sulla valence
-- confidence: un numero da 0.0 a 1.0 che indica la confidenza nella valutazione (opzionale)
+- energy: un numero da 0.0 a 1.0 dove 0.0 = molto calma/rilassante, 1.0 = molto energica/intensa (IMPORTANTE: richiesto per classificazione accurata)
+- danceability: un numero da 0.0 a 1.0 dove 0.0 = non ballabile, 1.0 = molto ballabile (restituisci null se non puoi calcolarlo)
+- mood_category: una categoria basata su valence E energy insieme. Applica questa logica IN ORDINE (IMPORTANTE: controlla prima la neutralità):
+  1. "neutrale": SE ENTRAMBI valence E energy sono compresi tra 0.45 e 0.55 (inclusi)
+  2. "euforico": SE NON è neutrale, E alta valence (>0.5) + alta energy (>0.5) - canzoni positive e intense (es. "Don't Stop Me Now")
+  3. "sereno": SE NON è neutrale, E alta valence (>0.5) + bassa energy (<=0.5) - canzoni positive ma calme (es. "Here Comes The Sun")
+  4. "arrabbiato": SE NON è neutrale, E bassa valence (<=0.5) + alta energy (>0.5) - canzoni negative e intense (es. "Smells Like Teen Spirit")
+  5. "malinconico": SE NON è neutrale, E bassa valence (<=0.5) + bassa energy (<=0.5) - canzoni negative e calme (es. "Another Love")
+- confidence: un numero da 0.0 a 1.0 che indica la confidenza nella valutazione (restituisci null se non puoi calcolarlo)
 
 IMPORTANTE: Restituisci un oggetto JSON con una chiave "results" che contiene un array. Ogni elemento dell'array deve corrispondere all'ordine delle canzoni fornite.
 
@@ -85,8 +91,15 @@ Formato di risposta richiesto:
       "valence": 0.75,
       "energy": 0.8,
       "danceability": 0.7,
-      "mood_category": "felice",
+      "mood_category": "euforico",
       "confidence": 0.9
+    },
+    {
+      "valence": 0.5,
+      "energy": 0.5,
+      "danceability": null,
+      "mood_category": "neutrale",
+      "confidence": null
     },
     ...
   ]
@@ -304,25 +317,25 @@ Formato di risposta richiesto:
       
       const result = results[index] || {};
       
-      // Determina mood_category se non fornito
-      let moodCategory: 'felice' | 'neutrale' | 'triste' | 'sconosciuto' = 'sconosciuto';
+      // Normalizza i valori
+      const valence = typeof result.valence === 'number' ? Math.max(0, Math.min(1, result.valence)) : 0.5;
+      const energy = typeof result.energy === 'number' ? Math.max(0, Math.min(1, result.energy)) : undefined;
+      
+      // Determina mood_category usando il classificatore
+      let moodCategory: MoodAnalysisResult['mood_category'] = 'sconosciuto';
       if (result.mood_category) {
-        moodCategory = result.mood_category;
-      } else if (typeof result.valence === 'number') {
-        if (result.valence >= 0.6) {
-          moodCategory = 'felice';
-        } else if (result.valence >= 0.4) {
-          moodCategory = 'neutrale';
-        } else {
-          moodCategory = 'triste';
-        }
+        // Se il modello ha fornito un mood_category, lo usiamo direttamente
+        moodCategory = result.mood_category as MoodAnalysisResult['mood_category'];
+      } else {
+        // Usa il classificatore basato su valence ed energy
+        moodCategory = get_mood(valence, energy);
       }
 
       return {
         track: track.track,
         artist: track.artist,
-        valence: typeof result.valence === 'number' ? Math.max(0, Math.min(1, result.valence)) : 0.5,
-        energy: typeof result.energy === 'number' ? Math.max(0, Math.min(1, result.energy)) : undefined,
+        valence,
+        energy,
         danceability: typeof result.danceability === 'number' ? Math.max(0, Math.min(1, result.danceability)) : undefined,
         mood_category: moodCategory,
         confidence: typeof result.confidence === 'number' ? Math.max(0, Math.min(1, result.confidence)) : undefined,

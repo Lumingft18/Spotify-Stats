@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import type { DataFrameData, MoodAnalysisResult } from '../types';
 import type { PeriodType } from './PeriodFilter';
 import { DataTable } from './DataTable';
@@ -6,6 +6,25 @@ import { MultiLinePlot } from './MultiLinePlot';
 import { getPyodide, startAIMoodAnalysis } from '../utils/pyodide';
 import { cancelMoodAnalysis, isCancelled } from '../utils/openrouter';
 import { loadMoodResultsFromIndexedDB } from '../utils/storage';
+import { get_mood } from '../utils/moodClassifier';
+
+/**
+ * Riclassifica un singolo risultato mood usando la logica v2 se necessario
+ */
+function reclassifyMoodResult(result: MoodAnalysisResult): MoodAnalysisResult {
+  // Se il risultato ha già un mood_category valido, non fare nulla
+  const validMoods = ['euforico', 'sereno', 'arrabbiato', 'malinconico', 'neutrale', 'sconosciuto'];
+  if (result.mood_category && validMoods.includes(result.mood_category)) {
+    return result;
+  }
+
+  // Altrimenti, calcolalo con v2
+  const newMoodCategory = get_mood(result.valence, result.energy);
+  return {
+    ...result,
+    mood_category: newMoodCategory
+  };
+}
 
 interface MoodContentProps {
   dataCache: { [key: string]: DataFrameData | any };
@@ -64,12 +83,15 @@ async function loadAllMoodResults(): Promise<MoodAnalysisResult[]> {
     const indexedResults = await loadMoodResultsFromIndexedDB();
     indexedResults.forEach(({ result }) => {
       if (result && result.track && result.artist) {
+        // Riclassifica il mood usando la logica v2 se necessario
+        const reclassifiedResult = reclassifyMoodResult(result);
+
         // Evita duplicati
-        const exists = results.some(r => 
-          r.track === result.track && r.artist === result.artist
+        const exists = results.some(r =>
+          r.track === reclassifiedResult.track && r.artist === reclassifiedResult.artist
         );
         if (!exists) {
-          results.push(result);
+          results.push(reclassifiedResult);
         }
       }
     });
@@ -80,82 +102,191 @@ async function loadAllMoodResults(): Promise<MoodAnalysisResult[]> {
   return results;
 }
 
+const MOOD_DISPLAY_META: Record<string, { gradient: string; emoji: string; color: string }> = {
+  euforico: { gradient: 'from-yellow-400 to-orange-500', emoji: '🎉', color: '#f97316' },
+  sereno: { gradient: 'from-green-400 to-teal-500', emoji: '😌', color: '#14b8a6' },
+  arrabbiato: { gradient: 'from-red-500 to-rose-600', emoji: '😠', color: '#ef4444' },
+  malinconico: { gradient: 'from-blue-500 to-indigo-600', emoji: '😔', color: '#3b82f6' },
+  neutrale: { gradient: 'from-gray-400 to-gray-500', emoji: '😐', color: '#9ca3af' },
+  sconosciuto: { gradient: 'from-gray-500 to-gray-600', emoji: '❓', color: '#6b7280' },
+};
+
+const MOOD_PERCENT_COLORS = Object.entries(MOOD_DISPLAY_META).reduce((acc, [mood, meta]) => {
+  acc[`${mood}_percent`] = meta.color;
+  return acc;
+}, {} as Record<string, string>);
+
+const MOOD_PERCENT_COLUMN_ORDER = Object.keys(MOOD_PERCENT_COLORS);
+
+function prepareMoodTimeSeriesData(data?: DataFrameData | null): DataFrameData | null {
+  if (!data || !Array.isArray(data.columns) || !Array.isArray(data.data)) {
+    return null;
+  }
+
+  const xColumn = data.columns[0];
+  const columns = [xColumn, ...MOOD_PERCENT_COLUMN_ORDER];
+
+  const preparedData = (data.data || []).map(row => {
+    const rowMap: Record<string, any> = {};
+    data.columns.forEach((col, idx) => {
+      rowMap[col] = row[idx];
+    });
+
+    const newRow: any[] = [rowMap[xColumn]];
+    MOOD_PERCENT_COLUMN_ORDER.forEach(col => {
+      newRow.push(rowMap[col] ?? 0);
+    });
+    return newRow;
+  });
+
+  return {
+    columns,
+    data: preparedData
+  };
+}
+
+function normalizeTrackArtistKey(track?: string | null, artist?: string | null): string | null {
+  if (!track && !artist) {
+    return null;
+  }
+
+  let trackName = typeof track === 'string' ? track : '';
+  let artistName = typeof artist === 'string' ? artist : '';
+
+  if (trackName.includes('~~sep~~')) {
+    const parts = trackName.split('~~sep~~');
+    trackName = parts[0] || '';
+    if (parts.length > 1 && !artistName) {
+      artistName = parts[1] || '';
+    }
+  }
+
+  const normalizedTrack = trackName.trim().toLowerCase();
+  const normalizedArtist = artistName.trim().toLowerCase();
+
+  if (!normalizedTrack) {
+    return null;
+  }
+
+  return `${normalizedTrack}|||${normalizedArtist}`;
+}
+
 // Funzione per ottenere le canzoni del periodo corrente dal dataCache
-function getTracksInPeriod(dataCache: { [key: string]: DataFrameData | any }): Set<string> {
+function getTracksInPeriod(dataCache: { [key: string]: DataFrameData | any }, currentPeriod?: string): Set<string> {
   const tracksSet = new Set<string>();
-  
+
   try {
-    // Prova a ottenere le canzoni dalla tabella "most_played_tracks_total"
-    const mostPlayedSongs = dataCache['most_played_tracks_total'] as DataFrameData | undefined;
-    if (mostPlayedSongs && mostPlayedSongs.columns && mostPlayedSongs.data) {
-      const trackColIndex = mostPlayedSongs.columns.indexOf('track');
-      const artistColIndex = mostPlayedSongs.columns.indexOf('artist');
-      
-      if (trackColIndex >= 0) {
-        mostPlayedSongs.data.forEach((row: any[]) => {
-          const track = row[trackColIndex];
-          
-          if (track) {
-            // Gestisci il formato "track~~sep~~artist" o separato
-            let trackClean = String(track);
-            let artistClean = '';
-            
-            if (trackClean.includes('~~sep~~')) {
-              const parts = trackClean.split('~~sep~~');
-              trackClean = parts[0];
-              if (parts.length > 1) {
-                artistClean = parts[1];
-              }
-            } else if (artistColIndex >= 0) {
-              // Se non c'è il separatore, usa la colonna artist separata
-              artistClean = String(row[artistColIndex] || '');
-            }
-            
-            // Crea una chiave univoca (track + artist)
-            const key = `${trackClean.trim().toLowerCase()}|||${artistClean.trim().toLowerCase()}`;
+    console.log(`[getTracksInPeriod] Iniziando ricerca per periodo: ${currentPeriod}`);
+    console.log(`[getTracksInPeriod] Chiavi dataCache disponibili:`, Object.keys(dataCache));
+
+    const filteredTrackKeys = dataCache?.filtered_track_keys;
+    if (Array.isArray(filteredTrackKeys) && filteredTrackKeys.length > 0) {
+      filteredTrackKeys.forEach(entry => {
+        if (typeof entry === 'string') {
+          const normalized = entry.trim().toLowerCase();
+          if (normalized) {
+            tracksSet.add(normalized);
+          }
+        } else if (entry && typeof entry === 'object') {
+          const key = normalizeTrackArtistKey(
+            'track' in entry ? entry.track : ('track_clean' in entry ? entry.track_clean : undefined),
+            'artist' in entry ? entry.artist : ('artist_clean' in entry ? entry.artist_clean : undefined)
+          );
+          if (key) {
             tracksSet.add(key);
           }
-        });
-      }
+        }
+      });
+
+      console.log(`[getTracksInPeriod] Recuperate ${tracksSet.size} canzoni dal dataset filtered_track_keys`);
+      return tracksSet;
     }
-    
-    // Se non abbiamo trovato canzoni, prova anche altre tabelle che potrebbero contenere track
-    if (tracksSet.size === 0) {
-      // Prova con "top_songs_of_top_artists"
-      const topSongs = dataCache['top_songs_of_top_artists'] as DataFrameData | undefined;
-      if (topSongs && topSongs.columns && topSongs.data) {
-        const trackColIndex = topSongs.columns.indexOf('track');
-        const artistColIndex = topSongs.columns.indexOf('artist');
-        
-        if (trackColIndex >= 0) {
-          topSongs.data.forEach((row: any[]) => {
-            const track = row[trackColIndex];
-            
-            if (track) {
-              let trackClean = String(track);
-              let artistClean = '';
-              
-              if (trackClean.includes('~~sep~~')) {
-                const parts = trackClean.split('~~sep~~');
-                trackClean = parts[0];
-                if (parts.length > 1) {
-                  artistClean = parts[1];
-                }
-              } else if (artistColIndex >= 0) {
-                artistClean = String(row[artistColIndex] || '');
-              }
-              
-              const key = `${trackClean.trim().toLowerCase()}|||${artistClean.trim().toLowerCase()}`;
-              tracksSet.add(key);
-            }
-          });
+
+    // Prima cerca dataset che potrebbero contenere dati di traccia per il periodo corrente come fallback
+    const candidateDatasets: Array<{ key: string; data: any; priority: number }> = [];
+
+    for (const key in dataCache) {
+      const data = dataCache[key];
+      if (data && 'columns' in data && 'data' in data && Array.isArray(data.data)) {
+        const columns = data.columns;
+
+        // Cerca colonne track e artist
+        const trackColIndex = columns.indexOf('track');
+        const trackCleanColIndex = columns.indexOf('track_clean');
+        const artistColIndex = columns.indexOf('artist');
+        const artistCleanColIndex = columns.indexOf('artist_clean');
+
+        // Se ha colonne track/artist, aggiungilo alla lista dei candidati
+        if ((trackColIndex >= 0 || trackCleanColIndex >= 0) &&
+            (artistColIndex >= 0 || artistCleanColIndex >= 0)) {
+
+          // Assegna priorità: dataset più grandi hanno priorità più alta
+          let priority = data.data.length;
+
+          // Bonus per dataset che sembrano contenere dati completi di traccia
+          if (key.includes('tracks') && !key.includes('top_') && !key.includes('stats')) {
+            priority = priority * 2; // Doppio priorità per dataset "tracks"
+          }
+
+          // Penalizza dataset che sembrano essere aggregazioni/statistiche
+          if (key.includes('distribution') || key.includes('stats') || key.includes('top_')) {
+            priority = priority * 0.1; // Molto bassa priorità
+          } else if (key.includes('per_week') || key.includes('per_month') || key.includes('per_day')) {
+            priority = priority * 0.5; // Priorità media
+          }
+
+          candidateDatasets.push({ key, data, priority });
         }
       }
+    }
+
+    // Ordina per priorità (descendente) e dimensione (descendente)
+    candidateDatasets.sort((a, b) => b.priority - a.priority);
+
+    console.log(`[getTracksInPeriod] Dataset candidati trovati:`, candidateDatasets.map(d => `${d.key} (${d.data.data.length} righe, priorità: ${d.priority})`));
+    
+    for (const candidate of candidateDatasets) {
+      const candidateData = candidate.data as DataFrameData;
+      if (
+        !candidateData ||
+        !Array.isArray(candidateData.columns) ||
+        !Array.isArray(candidateData.data) ||
+        candidateData.columns.length === 0
+      ) {
+        continue;
+      }
+
+      const columns = candidateData.columns;
+      const trackIndex = columns.indexOf('track_clean') >= 0 ? columns.indexOf('track_clean') : columns.indexOf('track');
+      const artistIndex = columns.indexOf('artist_clean') >= 0 ? columns.indexOf('artist_clean') : columns.indexOf('artist');
+
+      if (trackIndex < 0) {
+        continue;
+      }
+
+      candidateData.data.forEach(row => {
+        if (!Array.isArray(row)) {
+          return;
+        }
+        const trackValue = row[trackIndex];
+        const artistValue = artistIndex >= 0 ? row[artistIndex] : undefined;
+        const key = normalizeTrackArtistKey(
+          typeof trackValue === 'string' ? trackValue : trackValue != null ? String(trackValue) : undefined,
+          typeof artistValue === 'string' ? artistValue : artistValue != null ? String(artistValue) : undefined
+        );
+        if (key) {
+          tracksSet.add(key);
+        }
+      });
     }
   } catch (error) {
     console.warn('[MoodContent] Errore nell\'estrarre le canzoni dal dataCache:', error);
   }
-  
+
+  console.log(`[getTracksInPeriod] Totale canzoni trovate: ${tracksSet.size}`);
+  if (tracksSet.size > 0) {
+    console.log(`[getTracksInPeriod] Esempi di canzoni:`, Array.from(tracksSet).slice(0, 3));
+  }
   return tracksSet;
 }
 
@@ -170,45 +301,65 @@ function filterMoodResultsByPeriod(
     console.log('[MoodContent] Periodo "total", restituisco tutti i risultati:', results.length);
     return results;
   }
-  
+
   // Se non ci sono dati nel dataCache, restituisci tutti i risultati
   if (!dataCache || Object.keys(dataCache).length === 0) {
     console.log('[MoodContent] Nessun dataCache disponibile, restituisco tutti i risultati');
     return results;
   }
-  
+
   // Ottieni le canzoni del periodo corrente
-  const tracksInPeriod = getTracksInPeriod(dataCache);
+  const tracksInPeriod = getTracksInPeriod(dataCache, currentPeriod);
   console.log('[MoodContent] Canzoni nel periodo:', {
     period: currentPeriod,
     tracksCount: tracksInPeriod.size,
     sampleTracks: Array.from(tracksInPeriod).slice(0, 5)
   });
-  
+
   // Se non ci sono canzoni nel periodo, potrebbe essere che il filtro non sia ancora applicato
-  // In questo caso, restituisci tutti i risultati
+  // o che il dataCache non sia ancora aggiornato. In questo caso, restituisci tutti i risultati
+  // ma logga un warning
   if (tracksInPeriod.size === 0) {
-    console.log('[MoodContent] Nessuna canzone trovata nel periodo, restituisco tutti i risultati');
+    console.warn('[MoodContent] Nessuna canzone trovata nel periodo corrente, potrebbe essere che il dataCache non sia ancora aggiornato. Restituisco tutti i risultati per ora.');
+    console.log('[MoodContent] Chiavi dataCache disponibili:', Object.keys(dataCache));
     return results;
   }
-  
+
+  // Se abbiamo molto poche canzoni (meno di 100), potrebbe essere un errore
+  // Logga un warning ma procedi comunque
+  if (tracksInPeriod.size < 100) {
+    console.warn(`[MoodContent] Solo ${tracksInPeriod.size} canzoni trovate nel periodo ${currentPeriod}, potrebbe essere un errore di filtraggio`);
+  }
+
   // Filtra i risultati per includere solo le canzoni del periodo
   const filtered = results.filter(result => {
     if (!result.track || !result.artist) {
       return false;
     }
-    
-    // Crea la chiave nello stesso formato
-    const key = `${result.track.trim().toLowerCase()}|||${result.artist.trim().toLowerCase()}`;
+
+    const key = normalizeTrackArtistKey(result.track, result.artist);
+    if (!key) {
+      return false;
+    }
     return tracksInPeriod.has(key);
   });
-  
+
   console.log('[MoodContent] Filtro completato:', {
     totalResults: results.length,
     filteredResults: filtered.length,
-    matched: filtered.length > 0
+    matched: filtered.length > 0,
+    period: currentPeriod,
+    tracksInPeriod: tracksInPeriod.size
   });
-  
+
+  // Se non abbiamo trovato corrispondenze ma abbiamo canzoni nel periodo,
+  // potrebbe essere un problema di normalizzazione dei nomi
+  if (filtered.length === 0 && tracksInPeriod.size > 0) {
+    console.warn('[MoodContent] Nessuna corrispondenza trovata tra risultati mood e canzoni del periodo. Potrebbe essere un problema di normalizzazione dei nomi.');
+    console.log('[MoodContent] Esempi risultati mood:', results.slice(0, 3).map(r => `${r.track} - ${r.artist}`));
+    console.log('[MoodContent] Esempi canzoni periodo:', Array.from(tracksInPeriod).slice(0, 3));
+  }
+
   return filtered;
 }
 
@@ -224,7 +375,16 @@ interface AdvancedMoodStats {
     avgEnergy: number;
     avgDanceability: number;
     trackCount: number;
-    moodDistribution: { felice: number; neutrale: number; triste: number };
+    moodDistribution: {
+      felice: number;
+      neutrale: number;
+      triste: number;
+      // Nuovi mood v2
+      euforico: number;
+      sereno: number;
+      arrabbiato: number;
+      malinconico: number;
+    };
   }>;
   featureDistribution: {
     valence: number[];
@@ -242,12 +402,24 @@ interface AdvancedMoodStats {
     avgEnergy: number;
     avgDanceability: number;
     totalTracks: number;
-    moodCounts: { felice: number; neutrale: number; triste: number; sconosciuto: number };
+    moodCounts: {
+      felice: number;
+      neutrale: number;
+      triste: number;
+      // Nuovi mood v2
+      euforico: number;
+      sereno: number;
+      arrabbiato: number;
+      malinconico: number;
+      sconosciuto: number;
+    };
   };
 }
 
 // Funzione per calcolare statistiche avanzate
 function calculateAdvancedStats(results: MoodAnalysisResult[]): AdvancedMoodStats {
+  console.log('[calculateAdvancedStats] Input results:', results.length);
+
   if (results.length === 0) {
     return {
       topHappiest: [],
@@ -262,13 +434,23 @@ function calculateAdvancedStats(results: MoodAnalysisResult[]): AdvancedMoodStat
         mostEnergetic: results[0] || {} as MoodAnalysisResult,
         mostDanceable: results[0] || {} as MoodAnalysisResult,
       },
-      overallStats: {
-        avgValence: 0,
-        avgEnergy: 0,
-        avgDanceability: 0,
-        totalTracks: 0,
-        moodCounts: { felice: 0, neutrale: 0, triste: 0, sconosciuto: 0 },
+    overallStats: {
+      avgValence: 0,
+      avgEnergy: 0,
+      avgDanceability: 0,
+      totalTracks: 0,
+      moodCounts: {
+        felice: 0,
+        neutrale: 0,
+        triste: 0,
+        // Nuovi mood v2
+        euforico: 0,
+        sereno: 0,
+        arrabbiato: 0,
+        malinconico: 0,
+        sconosciuto: 0
       },
+    },
     };
   }
 
@@ -320,25 +502,49 @@ function calculateAdvancedStats(results: MoodAnalysisResult[]): AdvancedMoodStat
 
   const artistStats = Array.from(artistMap.entries())
     .map(([artist, tracks]) => {
-      const withValence = tracks.filter(t => t.valence !== null && t.valence !== undefined);
-      const withEnergy = tracks.filter(t => t.energy !== null && t.energy !== undefined);
-      const withDanceability = tracks.filter(t => t.danceability !== null && t.danceability !== undefined);
-
-      const avgValence = withValence.length > 0
-        ? withValence.reduce((sum, t) => sum + (t.valence || 0), 0) / withValence.length
-        : 0;
-      const avgEnergy = withEnergy.length > 0
-        ? withEnergy.reduce((sum, t) => sum + (t.energy || 0), 0) / withEnergy.length
-        : 0;
-      const avgDanceability = withDanceability.length > 0
-        ? withDanceability.reduce((sum, t) => sum + (t.danceability || 0), 0) / withDanceability.length
-        : 0;
+      // Calcola statistiche in un singolo passaggio per ottimizzare prestazioni
+      let valenceSum = 0, energySum = 0, danceabilitySum = 0;
+      let valenceCount = 0, energyCount = 0, danceabilityCount = 0;
 
       const moodDistribution = {
-        felice: tracks.filter(t => t.mood_category === 'felice').length,
-        neutrale: tracks.filter(t => t.mood_category === 'neutrale').length,
-        triste: tracks.filter(t => t.mood_category === 'triste').length,
+        felice: 0,
+        neutrale: 0,
+        triste: 0,
+        euforico: 0,
+        sereno: 0,
+        arrabbiato: 0,
+        malinconico: 0,
       };
+
+      // Calcola tutto in un singolo loop per ottimizzare
+      tracks.forEach(track => {
+        // Mood distribution
+        if (track.mood_category && moodDistribution.hasOwnProperty(track.mood_category)) {
+          moodDistribution[track.mood_category as keyof typeof moodDistribution]++;
+        }
+
+        // Valence
+        if (track.valence !== null && track.valence !== undefined) {
+          valenceSum += track.valence;
+          valenceCount++;
+        }
+
+        // Energy
+        if (track.energy !== null && track.energy !== undefined) {
+          energySum += track.energy;
+          energyCount++;
+        }
+
+        // Danceability
+        if (track.danceability !== null && track.danceability !== undefined) {
+          danceabilitySum += track.danceability;
+          danceabilityCount++;
+        }
+      });
+
+      const avgValence = valenceCount > 0 ? valenceSum / valenceCount : 0;
+      const avgEnergy = energyCount > 0 ? energySum / energyCount : 0;
+      const avgDanceability = danceabilityCount > 0 ? danceabilitySum / danceabilityCount : 0;
 
       return {
         artist,
@@ -371,12 +577,28 @@ function calculateAdvancedStats(results: MoodAnalysisResult[]): AdvancedMoodStat
     ? featureDistribution.danceability.reduce((sum, d) => sum + d, 0) / featureDistribution.danceability.length
     : 0;
 
+  // Conta i mood in un singolo passaggio per ottimizzare prestazioni
   const moodCounts = {
-    felice: validResults.filter(r => r.mood_category === 'felice').length,
-    neutrale: validResults.filter(r => r.mood_category === 'neutrale').length,
-    triste: validResults.filter(r => r.mood_category === 'triste').length,
-    sconosciuto: validResults.filter(r => !r.mood_category || r.mood_category === 'sconosciuto').length,
+    felice: 0,
+    neutrale: 0,
+    triste: 0,
+    euforico: 0,
+    sereno: 0,
+    arrabbiato: 0,
+    malinconico: 0,
+    sconosciuto: 0,
   };
+
+  validResults.forEach(result => {
+    const mood = result.mood_category;
+    if (mood && moodCounts.hasOwnProperty(mood)) {
+      moodCounts[mood as keyof typeof moodCounts]++;
+    } else {
+      moodCounts.sconosciuto++;
+    }
+  });
+
+  console.log('[calculateAdvancedStats] Mood counts:', moodCounts);
 
   return {
     topHappiest,
@@ -410,6 +632,39 @@ export function MoodContent({ dataCache, currentPeriod }: MoodContentProps) {
   const moodPerMonth = dataCache['mood_per_month'] as DataFrameData | undefined;
   const moodPerDay = dataCache['mood_per_day'] as DataFrameData | undefined;
   const moodPerDayOfWeek = dataCache['mood_per_day_of_week'] as DataFrameData | undefined;
+
+  const moodPerDayChartData = React.useMemo(() => prepareMoodTimeSeriesData(moodPerDay), [moodPerDay]);
+  const moodPerWeekChartData = React.useMemo(() => prepareMoodTimeSeriesData(moodPerWeek), [moodPerWeek]);
+  const moodPerMonthChartData = React.useMemo(() => prepareMoodTimeSeriesData(moodPerMonth), [moodPerMonth]);
+
+  // Calcola distribuzione del mood dai risultati filtrati invece di usare quella del dataCache
+  const filteredMoodDistribution = React.useMemo(() => {
+    if (!advancedStats) return null;
+
+    const totalTracks = advancedStats.overallStats.totalTracks;
+    if (totalTracks === 0) return null;
+
+    const moodCounts = advancedStats.overallStats.moodCounts;
+
+    // Crea array nel formato DataFrameData per compatibilità
+    const data: (string | number)[][] = [];
+
+    // Aggiungi tutti i mood, anche con conteggio 0, ordinati dal maggiore al minore
+    Object.entries(moodCounts)
+      .sort(([, countA], [, countB]) => (countB as number) - (countA as number))
+      .forEach(([mood, count]) => {
+        const numericCount = typeof count === 'number' ? count : 0;
+        const percentage = totalTracks > 0
+          ? Math.round((numericCount / totalTracks) * 1000) / 10 // Una cifra decimale
+          : 0;
+        data.push([mood, percentage, numericCount]);
+      });
+
+    return {
+      columns: ['mood', 'percentuale', 'conteggio'],
+      data
+    };
+  }, [advancedStats]);
   
   // Carica l'API key salvata
   useEffect(() => {
@@ -503,13 +758,13 @@ export function MoodContent({ dataCache, currentPeriod }: MoodContentProps) {
         hasDataCache: !!dataCache,
         dataCacheKeys: dataCache ? Object.keys(dataCache) : []
       });
-      
+
       if (savedCount > 0) {
         setIsLoadingAdvancedStats(true);
         try {
           const allResults = await loadAllMoodResults();
           console.log('[MoodContent] Risultati caricati:', allResults.length);
-          
+
           if (allResults.length > 0) {
             // Filtra i risultati in base al periodo corrente
             const filteredResults = filterMoodResultsByPeriod(allResults, dataCache, currentPeriod);
@@ -518,7 +773,7 @@ export function MoodContent({ dataCache, currentPeriod }: MoodContentProps) {
               filtered: filteredResults.length,
               period: currentPeriod
             });
-            
+
             const stats = calculateAdvancedStats(filteredResults);
             setAdvancedStats(stats);
             console.log('[MoodContent] Statistiche avanzate aggiornate:', {
@@ -537,11 +792,12 @@ export function MoodContent({ dataCache, currentPeriod }: MoodContentProps) {
         }
       } else {
         setAdvancedStats(null);
+        setIsLoadingAdvancedStats(false);
       }
     };
 
     loadAdvancedStats();
-  }, [moodDistribution, hasCompletedAnalysis, currentPeriod, dataCache]);
+  }, [hasCompletedAnalysis, currentPeriod, dataCache]);
 
   // Controlla il progresso delle audio features
   useEffect(() => {
@@ -1022,46 +1278,37 @@ export function MoodContent({ dataCache, currentPeriod }: MoodContentProps) {
       
       {/* Mostra i dati se disponibili */}
       {/* Distribuzione generale del mood */}
-      {moodDistribution && (
+      {filteredMoodDistribution && (
         <div className="space-y-4">
           <h3 className="text-xl font-bold text-green-400 flex items-center gap-2">
             <span>📊</span> Distribuzione generale del mood
           </h3>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            {moodDistribution.data?.filter((row: any[]) => {
-              const percentuale = row[1] as number;
-              // Mostra solo i mood con percentuale > 0
-              return percentuale > 0;
-            }).map((row: any[], index: number) => {
+            {(filteredMoodDistribution.data || [])
+              .filter((row: any[]) => {
+                if (!Array.isArray(row)) return false;
+                const count = typeof row[2] === 'number' ? row[2] : 0;
+                return count > 0;
+              })
+              .map((row: any[], index: number) => {
               const mood = row[0] as string;
-              const percentuale = row[1] as number;
-              const conteggio = row[2] as number;
-              
-              const moodColors: { [key: string]: string } = {
-                felice: 'from-green-500 to-emerald-600',
-                neutrale: 'from-yellow-500 to-orange-600',
-                triste: 'from-blue-500 to-indigo-600',
-                sconosciuto: 'from-gray-500 to-gray-600',
-              };
-              
-              const moodEmojis: { [key: string]: string } = {
-                felice: '😊',
-                neutrale: '😐',
-                triste: '😢',
-                sconosciuto: '❓',
-              };
+              const percentuale = typeof row[1] === 'number' ? row[1] as number : 0;
+              const conteggio = typeof row[2] === 'number' ? row[2] as number : 0;
+              const meta = MOOD_DISPLAY_META[mood] || { gradient: 'from-gray-500 to-gray-600', emoji: '❓' };
               
               return (
                 <div
                   key={index}
-                  className={`bg-gradient-to-br ${moodColors[mood] || 'from-gray-500 to-gray-600'} rounded-xl p-6 shadow-xl`}
+                  className={`bg-gradient-to-br ${meta.gradient} rounded-xl p-6 shadow-xl`}
                 >
                   <div className="flex items-center justify-between mb-2">
-                    <span className="text-3xl">{moodEmojis[mood] || '❓'}</span>
+                    <span className="text-3xl">{meta.emoji}</span>
                     <span className="text-2xl font-bold text-white">{percentuale.toFixed(1)}%</span>
                   </div>
                   <div className="text-white/90 font-medium capitalize">{mood}</div>
-                  <div className="text-white/70 text-sm mt-1">{conteggio.toLocaleString()} canzoni</div>
+                  <div className="text-white/70 text-sm mt-1">
+                    {conteggio.toLocaleString()} canzoni
+                  </div>
                 </div>
               );
             })}
@@ -1070,53 +1317,29 @@ export function MoodContent({ dataCache, currentPeriod }: MoodContentProps) {
       )}
 
       {/* Mood per settimana/giorno */}
-      {(shouldShowDailyData ? moodPerDay : moodPerWeek) && (
+      {(shouldShowDailyData ? moodPerDayChartData : moodPerWeekChartData) && (
         <div className="space-y-4">
           <h3 className="text-xl font-bold text-green-400 flex items-center gap-2">
             <span>📅</span> Mood {shouldShowDailyData ? 'per giorno' : 'per settimana'}
           </h3>
           {shouldShowDailyData ? (
-            moodPerDay?.columns?.includes('felice_percent') && (
+            moodPerDayChartData && (
               <MultiLinePlot
-                title="Percentuale di canzoni felici/neutre/tristi per giorno"
-                data={{
-                  columns: [
-                    moodPerDay.columns[0], // year_month_day
-                    ...moodPerDay.columns.filter((c: string) => c.endsWith('_percent'))
-                  ],
-                  data: moodPerDay.data?.map((row: any[]) => {
-                    const newRow = [row[0]]; // year_month_day
-                    moodPerDay.columns?.forEach((col: string, idx: number) => {
-                      if (col.endsWith('_percent')) {
-                        newRow.push(row[idx]);
-                      }
-                    });
-                    return newRow;
-                  }) || []
-                }}
+                title="Distribuzione mood per giorno"
+                data={moodPerDayChartData}
                 yUnit="percentuale (%)"
+                yColumns={MOOD_PERCENT_COLUMN_ORDER}
+                seriesColors={MOOD_PERCENT_COLORS}
               />
             )
           ) : (
-            moodPerWeek?.columns?.includes('felice_percent') && (
+            moodPerWeekChartData && (
               <MultiLinePlot
-                title="Percentuale di canzoni felici/neutre/tristi per settimana"
-                data={{
-                  columns: [
-                    moodPerWeek.columns[0], // year_week
-                    ...moodPerWeek.columns.filter((c: string) => c.endsWith('_percent'))
-                  ],
-                  data: moodPerWeek.data?.map((row: any[]) => {
-                    const newRow = [row[0]]; // year_week
-                    moodPerWeek.columns?.forEach((col: string, idx: number) => {
-                      if (col.endsWith('_percent')) {
-                        newRow.push(row[idx]);
-                      }
-                    });
-                    return newRow;
-                  }) || []
-                }}
+                title="Distribuzione mood per settimana"
+                data={moodPerWeekChartData}
                 yUnit="percentuale (%)"
+                yColumns={MOOD_PERCENT_COLUMN_ORDER}
+                seriesColors={MOOD_PERCENT_COLORS}
               />
             )
           )}
@@ -1124,32 +1347,18 @@ export function MoodContent({ dataCache, currentPeriod }: MoodContentProps) {
       )}
 
       {/* Mood per mese */}
-      {moodPerMonth && (
+      {moodPerMonthChartData && (
         <div className="space-y-4">
           <h3 className="text-xl font-bold text-green-400 flex items-center gap-2">
             <span>📆</span> Mood per mese
           </h3>
-          {moodPerMonth.columns?.includes('felice_percent') && (
-            <MultiLinePlot
-              title="Percentuale di canzoni felici/neutre/tristi per mese"
-              data={{
-                columns: [
-                  moodPerMonth.columns[0], // month
-                  ...moodPerMonth.columns.filter((c: string) => c.endsWith('_percent'))
-                ],
-                data: moodPerMonth.data?.map((row: any[]) => {
-                  const newRow = [row[0]]; // month
-                  moodPerMonth.columns?.forEach((col: string, idx: number) => {
-                    if (col.endsWith('_percent')) {
-                      newRow.push(row[idx]);
-                    }
-                  });
-                  return newRow;
-                }) || []
-              }}
-              yUnit="percentuale (%)"
-            />
-          )}
+          <MultiLinePlot
+            title="Distribuzione mood per mese"
+            data={moodPerMonthChartData}
+            yUnit="percentuale (%)"
+            yColumns={MOOD_PERCENT_COLUMN_ORDER}
+            seriesColors={MOOD_PERCENT_COLORS}
+          />
         </div>
       )}
 
@@ -1163,6 +1372,26 @@ export function MoodContent({ dataCache, currentPeriod }: MoodContentProps) {
             title="Distribuzione del mood per giorno della settimana"
             data={moodPerDayOfWeek}
           />
+        </div>
+      )}
+
+      {/* Indicatore di caricamento statistiche avanzate */}
+      {isLoadingAdvancedStats && (
+        <div className="bg-gradient-to-br from-blue-900/30 to-indigo-900/30 border border-blue-700/50 rounded-xl p-6">
+          <div className="flex items-center gap-3">
+            <div className="animate-spin rounded-full h-8 w-8 border-2 border-blue-400 border-t-transparent"></div>
+            <div className="flex-1">
+              <p className="text-blue-200 font-semibold text-lg">
+                📊 Calcolo statistiche avanzate...
+              </p>
+              <p className="text-blue-400 text-sm mt-1">
+                Elaborazione di {getSavedMoodResultsCount()} risultati per generare statistiche dettagliate
+              </p>
+              <div className="mt-3 bg-blue-900/30 rounded-full h-2 overflow-hidden">
+                <div className="bg-gradient-to-r from-blue-500 to-indigo-500 h-2 rounded-full animate-pulse"></div>
+              </div>
+            </div>
+          </div>
         </div>
       )}
 
@@ -1542,16 +1771,32 @@ export function MoodContent({ dataCache, currentPeriod }: MoodContentProps) {
                           </div>
                         </div>
                       </div>
-                      <div className="mt-3 flex items-center gap-4 text-xs">
-                        <span className="text-green-400">
-                          😊 {artist.moodDistribution.felice} felici
-                        </span>
-                        <span className="text-yellow-400">
-                          😐 {artist.moodDistribution.neutrale} neutre
-                        </span>
-                        <span className="text-blue-400">
-                          😢 {artist.moodDistribution.triste} tristi
-                        </span>
+                      <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
+                        {artist.moodDistribution.euforico > 0 && (
+                          <span className="text-yellow-400">
+                            🎉 {artist.moodDistribution.euforico} euforici
+                          </span>
+                        )}
+                        {artist.moodDistribution.sereno > 0 && (
+                          <span className="text-green-400">
+                            😊 {artist.moodDistribution.sereno} sereni
+                          </span>
+                        )}
+                        {artist.moodDistribution.arrabbiato > 0 && (
+                          <span className="text-orange-400">
+                            😠 {artist.moodDistribution.arrabbiato} arrabbiati
+                          </span>
+                        )}
+                        {artist.moodDistribution.malinconico > 0 && (
+                          <span className="text-blue-400">
+                            😢 {artist.moodDistribution.malinconico} malinconici
+                          </span>
+                        )}
+                        {artist.moodDistribution.neutrale > 0 && (
+                          <span className="text-gray-400">
+                            😐 {artist.moodDistribution.neutrale} neutri
+                          </span>
+                        )}
                       </div>
                     </div>
                   ))}

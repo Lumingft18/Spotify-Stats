@@ -7,6 +7,16 @@ from io import BytesIO
 import numpy as np
 import pandas as pd
 
+MOOD_V2_CATEGORIES = ['euforico', 'sereno', 'arrabbiato', 'malinconico', 'neutrale']
+MOOD_V2_WITH_UNKNOWN = MOOD_V2_CATEGORIES + ['sconosciuto']
+
+
+def add_missing_mood_columns(df, mood_columns):
+    for mood in mood_columns:
+        if mood not in df.columns:
+            df[mood] = 0
+    return df
+
 
 def read_json(path_or_buf):
     # Leggi il JSON senza specificare dtype per campi opzionali
@@ -840,20 +850,90 @@ def get_df_random_sample(df, sample_count=1):
     return df_dict
 
 
-def classify_mood(valence, energy=None):
+
+
+def classify_mood(valence, energy=None, threshold=0.5, neutral_range=0.05):
     """
-    Classifica il mood basandosi su valence (e opzionalmente energy).
-    Valence: 0.0 = triste, 1.0 = felice
+    Classificatore del mood basato sul modello a quadranti.
+    Utilizza Valence (X) ed Energy (Y) per classificare le canzoni in 5 categorie principali.
+
+    Quadranti:
+    - Q1: Alta Valence (> threshold) + Alta Energy (> threshold) → "euforico"
+    - Q2: Alta Valence (> threshold) + Bassa Energy (<= threshold) → "sereno"
+    - Q3: Bassa Valence (<= threshold) + Alta Energy (> threshold) → "arrabbiato"
+    - Q4: Bassa Valence (<= threshold) + Bassa Energy (<= threshold) → "malinconico"
+
+    I valori molto vicini alla soglia (es. tra threshold - neutral_range e threshold + neutral_range)
+    vengono classificati come "neutrale" per evitare errori di classificazione.
+
+    Args:
+        valence: Valore di valenza da 0.0 a 1.0 (0.0 = triste, 1.0 = felice)
+        energy: Valore di energia da 0.0 a 1.0 (0.0 = calma, 1.0 = intensa). Opzionale.
+        threshold: Soglia di divisione (default: 0.5)
+        neutral_range: Range per considerare un valore "neutrale" (default: 0.05, quindi 0.45-0.55)
+
+    Returns:
+        Categoria del mood: "euforico", "sereno", "arrabbiato", "malinconico", "neutrale", "sconosciuto"
     """
-    if pd.isna(valence):
+    # Valida i parametri
+    if pd.isna(valence) or valence is None:
         return "sconosciuto"
     
-    if valence >= 0.6:
-        return "felice"
-    elif valence >= 0.4:
+    # Normalizza valence tra 0 e 1
+    normalized_valence = max(0.0, min(1.0, float(valence)))
+    
+    # Se energy non è disponibile, usa solo valence (fallback)
+    if pd.isna(energy) or energy is None:
+        if normalized_valence >= threshold + neutral_range:
+            return "euforico"  # Approssimazione: alta valence senza energy → sereno/euforico
+        elif normalized_valence <= threshold - neutral_range:
+            return "malinconico"  # Bassa valence senza energy → malinconico
+        else:
+            return "neutrale"
+    
+    # Normalizza energy tra 0 e 1
+    normalized_energy = max(0.0, min(1.0, float(energy)))
+    
+    # Calcola i range neutri
+    valence_lower_bound = threshold - neutral_range
+    valence_upper_bound = threshold + neutral_range
+    energy_lower_bound = threshold - neutral_range
+    energy_upper_bound = threshold + neutral_range
+    
+    # Gestione dei casi "neutri" - quando i valori sono molto vicini alla soglia
+    # IMPORTANTE: "neutrale" solo se ENTRAMBI i valori sono nella zona neutra
+    # Se solo uno è neutro, procedi con la classificazione a quadranti normale
+    is_valence_neutral = valence_lower_bound <= normalized_valence <= valence_upper_bound
+    is_energy_neutral = energy_lower_bound <= normalized_energy <= energy_upper_bound
+    
+    # Se entrambi i valori sono nella zona neutra, classifica come neutrale
+    # Questa è la PRIMA verifica da fare (priorità massima)
+    if is_valence_neutral and is_energy_neutral:
         return "neutrale"
-    else:
-        return "triste"
+    
+    # Classificazione a quadranti
+    # Quadrante 1: Alta Valence (> threshold) + Alta Energy (> threshold)
+    # Mood: Euforico
+    if normalized_valence > threshold and normalized_energy > threshold:
+        return "euforico"
+    
+    # Quadrante 2: Alta Valence (> threshold) + Bassa Energy (<= threshold)
+    # Mood: Sereno
+    if normalized_valence > threshold and normalized_energy <= threshold:
+        return "sereno"
+    
+    # Quadrante 3: Bassa Valence (<= threshold) + Alta Energy (> threshold)
+    # Mood: Arrabbiato
+    if normalized_valence <= threshold and normalized_energy > threshold:
+        return "arrabbiato"
+    
+    # Quadrante 4: Bassa Valence (<= threshold) + Bassa Energy (<= threshold)
+    # Mood: Malinconico
+    if normalized_valence <= threshold and normalized_energy <= threshold:
+        return "malinconico"
+    
+    # Fallback (non dovrebbe mai arrivare qui)
+    return "neutrale"
 
 
 def parse_user_agent(user_agent):
@@ -1104,7 +1184,7 @@ def get_username_statistics(df):
 def get_mood_statistics(df):
     """
     Calcola statistiche sul mood delle canzoni ascoltate.
-    Richiede che il DataFrame abbia una colonna 'valence' e 'mood'.
+    Richiede che il DataFrame abbia una colonna 'valence'.
     """
     out = {}
     
@@ -1113,10 +1193,16 @@ def get_mood_statistics(df):
     
     # Assicurati che il mood sia classificato
     if 'mood' not in df_copy.columns and 'valence' in df_copy.columns:
-        df_copy['mood'] = df_copy['valence'].apply(classify_mood)
-    
+        if 'energy' in df_copy.columns:
+            # Usa classify_mood con valence ed energy
+            df_copy['mood'] = df_copy.apply(lambda row: classify_mood(row['valence'], row['energy']), axis=1)
+        else:
+            # Fallback: usa classify_mood solo con valence
+            df_copy['mood'] = df_copy['valence'].apply(lambda v: classify_mood(v, None))
+
     if 'mood' not in df_copy.columns:
         return out
+
     
     # Filtra solo le canzoni completate
     df_full = df_copy[df_copy["full_play"]].copy()
@@ -1125,8 +1211,10 @@ def get_mood_statistics(df):
     mood_counts = df_full['mood'].value_counts()
     total_plays = len(df_full)
     
+    # Usa solo i mood v2
     mood_percentages = {}
-    for mood in ['felice', 'neutrale', 'triste', 'sconosciuto']:
+    all_moods_v2 = MOOD_V2_WITH_UNKNOWN
+    for mood in all_moods_v2:
         count = mood_counts.get(mood, 0)
         mood_percentages[mood] = round(count / total_plays * 100, 2) if total_plays > 0 else 0
     
@@ -1141,30 +1229,36 @@ def get_mood_statistics(df):
     df_full['year_week'] = df_full['ts'].dt.to_period('W').astype(str)
     mood_weekly = df_full.groupby(['year_week', 'mood']).size().reset_index(name='conteggio')
     mood_weekly_pivot = mood_weekly.pivot(index='year_week', columns='mood', values='conteggio').fillna(0)
-    mood_weekly_pivot['totale'] = mood_weekly_pivot.sum(axis=1)
-    for mood in ['felice', 'neutrale', 'triste']:
-        if mood in mood_weekly_pivot.columns:
-            mood_weekly_pivot[f'{mood}_percent'] = round(mood_weekly_pivot[mood] / mood_weekly_pivot['totale'] * 100, 2)
+    mood_weekly_pivot = add_missing_mood_columns(mood_weekly_pivot, MOOD_V2_CATEGORIES)
+    mood_weekly_pivot['totale'] = mood_weekly_pivot[MOOD_V2_CATEGORIES].sum(axis=1)
+    totals_week = mood_weekly_pivot['totale'].replace(0, np.nan)
+    for mood in MOOD_V2_CATEGORIES:
+        percent_series = (mood_weekly_pivot[mood] / totals_week).fillna(0) * 100
+        mood_weekly_pivot[f'{mood}_percent'] = percent_series.round(2)
     mood_weekly_pivot = mood_weekly_pivot.reset_index()
     out['mood_per_week'] = mood_weekly_pivot
     
     # Mood per mese
     mood_monthly = df_full.groupby(['year_month', 'mood']).size().reset_index(name='conteggio')
     mood_monthly_pivot = mood_monthly.pivot(index='year_month', columns='mood', values='conteggio').fillna(0)
-    mood_monthly_pivot['totale'] = mood_monthly_pivot.sum(axis=1)
-    for mood in ['felice', 'neutrale', 'triste']:
-        if mood in mood_monthly_pivot.columns:
-            mood_monthly_pivot[f'{mood}_percent'] = round(mood_monthly_pivot[mood] / mood_monthly_pivot['totale'] * 100, 2)
+    mood_monthly_pivot = add_missing_mood_columns(mood_monthly_pivot, MOOD_V2_CATEGORIES)
+    mood_monthly_pivot['totale'] = mood_monthly_pivot[MOOD_V2_CATEGORIES].sum(axis=1)
+    totals_month = mood_monthly_pivot['totale'].replace(0, np.nan)
+    for mood in MOOD_V2_CATEGORIES:
+        percent_series = (mood_monthly_pivot[mood] / totals_month).fillna(0) * 100
+        mood_monthly_pivot[f'{mood}_percent'] = percent_series.round(2)
     mood_monthly_pivot = mood_monthly_pivot.reset_index()
     out['mood_per_month'] = mood_monthly_pivot
     
     # Mood per giorno della settimana
     mood_by_day = df_full.groupby(['day_name', 'mood']).size().reset_index(name='conteggio')
     mood_by_day_pivot = mood_by_day.pivot(index='day_name', columns='mood', values='conteggio').fillna(0)
-    mood_by_day_pivot['totale'] = mood_by_day_pivot.sum(axis=1)
-    for mood in ['felice', 'neutrale', 'triste']:
-        if mood in mood_by_day_pivot.columns:
-            mood_by_day_pivot[f'{mood}_percent'] = round(mood_by_day_pivot[mood] / mood_by_day_pivot['totale'] * 100, 2)
+    mood_by_day_pivot = add_missing_mood_columns(mood_by_day_pivot, MOOD_V2_CATEGORIES)
+    mood_by_day_pivot['totale'] = mood_by_day_pivot[MOOD_V2_CATEGORIES].sum(axis=1)
+    totals_day = mood_by_day_pivot['totale'].replace(0, np.nan)
+    for mood in MOOD_V2_CATEGORIES:
+        percent_series = (mood_by_day_pivot[mood] / totals_day).fillna(0) * 100
+        mood_by_day_pivot[f'{mood}_percent'] = percent_series.round(2)
     # Ordina per giorno della settimana
     weekdays_order = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
     mood_by_day_pivot.index = pd.Categorical(mood_by_day_pivot.index, categories=weekdays_order, ordered=True)
@@ -1174,10 +1268,12 @@ def get_mood_statistics(df):
     # Mood per giorno (data specifica)
     mood_daily = df_full.groupby(['year_month_day', 'mood']).size().reset_index(name='conteggio')
     mood_daily_pivot = mood_daily.pivot(index='year_month_day', columns='mood', values='conteggio').fillna(0)
-    mood_daily_pivot['totale'] = mood_daily_pivot.sum(axis=1)
-    for mood in ['felice', 'neutrale', 'triste']:
-        if mood in mood_daily_pivot.columns:
-            mood_daily_pivot[f'{mood}_percent'] = round(mood_daily_pivot[mood] / mood_daily_pivot['totale'] * 100, 2)
+    mood_daily_pivot = add_missing_mood_columns(mood_daily_pivot, MOOD_V2_CATEGORIES)
+    mood_daily_pivot['totale'] = mood_daily_pivot[MOOD_V2_CATEGORIES].sum(axis=1)
+    totals_daily = mood_daily_pivot['totale'].replace(0, np.nan)
+    for mood in MOOD_V2_CATEGORIES:
+        percent_series = (mood_daily_pivot[mood] / totals_daily).fillna(0) * 100
+        mood_daily_pivot[f'{mood}_percent'] = percent_series.round(2)
     mood_daily_pivot = mood_daily_pivot.reset_index().sort_values('year_month_day')
     out['mood_per_day'] = mood_daily_pivot
 

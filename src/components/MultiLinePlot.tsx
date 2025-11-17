@@ -12,6 +12,7 @@ interface MultiLinePlotProps {
   yUnit: string;
   stacked?: boolean;
   barChart?: boolean;
+  seriesColors?: Record<string, string>;
 }
 
 export function MultiLinePlot({
@@ -22,6 +23,7 @@ export function MultiLinePlot({
   yUnit,
   stacked = false,
   barChart = false,
+  seriesColors,
 }: MultiLinePlotProps) {
   const plotRef = useRef<HTMLDivElement>(null);
 
@@ -35,13 +37,22 @@ export function MultiLinePlot({
     const x = data.data.map((row) => row[xIndex]);
 
     // Funzione per formattare i nomi delle colonne
+    const moodColumnNames: Record<string, string> = {
+      felice_percent: 'Felice',
+      neutrale_percent: 'Neutrale',
+      triste_percent: 'Triste',
+      sconosciuto_percent: 'Sconosciuto',
+      euforico_percent: 'Euforico',
+      sereno_percent: 'Sereno',
+      arrabbiato_percent: 'Arrabbiato',
+      malinconico_percent: 'Malinconico',
+    };
+
     const formatColumnName = (colName: string): string => {
-      // Gestisci i nomi delle colonne del mood
-      if (colName === 'felice_percent') return 'Felice';
-      if (colName === 'neutrale_percent') return 'Neutrale';
-      if (colName === 'triste_percent') return 'Triste';
-      if (colName === 'sconosciuto_percent') return 'Sconosciuto';
-      
+      if (moodColumnNames[colName]) {
+        return moodColumnNames[colName];
+      }
+
       // Gestisci altri casi comuni
       return colName.replaceAll(' by ', ' by<br>').replace(/_/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase());
     };
@@ -49,6 +60,8 @@ export function MultiLinePlot({
     const traces: any[] = yCols.map((yCol) => {
       const yIndex = data.columns.indexOf(yCol);
       const y = data.data.map((row) => row[yIndex]);
+
+      const traceColor = seriesColors?.[yCol];
 
       const trace: any = {
         x,
@@ -64,10 +77,13 @@ export function MultiLinePlot({
 
       if (barChart) {
         trace.type = 'bar';
-        trace.marker = { color: '#1DB954' };
+        trace.marker = { color: traceColor || '#1DB954' };
       } else {
         trace.type = 'scatter';
-        trace.line = { width: 3 };
+        trace.line = {
+          width: 3,
+          color: traceColor || '#22c55e',
+        };
       }
 
       return trace;
@@ -85,7 +101,7 @@ export function MultiLinePlot({
         Plotly.purge(plotRef.current);
       }
     };
-  }, [title, data, xColumn, yColumns, yUnit, stacked, barChart]);
+  }, [title, data, xColumn, yColumns, yUnit, stacked, barChart, seriesColors]);
 
   return <div ref={plotRef} className="w-full my-8" style={{ minHeight: '400px' }} />;
 }

@@ -3,13 +3,15 @@ export interface DataFrameData {
   data: (string | number)[][];
 }
 
+export type MoodCategory = 'euforico' | 'sereno' | 'arrabbiato' | 'malinconico' | 'neutrale' | 'sconosciuto';
+
 export interface MoodAnalysisResult {
   track: string;
   artist: string;
   valence: number;
   energy?: number;
   danceability?: number;
-  mood_category?: 'felice' | 'neutrale' | 'triste' | 'sconosciuto';
+  mood_category?: MoodCategory;
   confidence?: number;
 }
 

@@ -451,9 +451,14 @@ export async function startAIMoodAnalysis(
         df = df.merge(features_df[['key', 'valence', 'energy', 'danceability', 'tempo']], on='key', how='left')
         df = df.drop(columns=['key', 'track_clean', 'artist_clean'])
 
-        # Calcola/aggiorna il mood
+        # Calcola/aggiorna il mood usando il classificatore v2
         if 'valence' in df.columns:
-            df['mood'] = df['valence'].apply(classify_mood)
+            if 'energy' in df.columns:
+                # Usa classify_mood_v2 con valence ed energy
+                df['mood'] = df.apply(lambda row: classify_mood_v2(row['valence'], row['energy']), axis=1)
+            else:
+                # Fallback: usa classify_mood_v2 solo con valence (userà il fallback interno)
+                df['mood'] = df['valence'].apply(lambda v: classify_mood_v2(v, None))
         else:
             df['mood'] = None
 
@@ -692,17 +697,42 @@ export async function filterDataByPeriod(
     single_values = get_single_values(df_filtered, df_dict)
     df_dict_to_df_json_dict(df_dict)
     
-    {"df_dict": df_dict, "single_values": single_values}
+    filtered_track_keys = []
+    if 'track' in df_filtered.columns:
+        temp_df = df_filtered[['track']].copy()
+        if 'artist' in df_filtered.columns:
+            temp_df['artist'] = df_filtered['artist']
+        else:
+            temp_df['artist'] = ''
+        split_track = temp_df['track'].fillna('').astype(str).str.split('~~sep~~', n=1, expand=True)
+        temp_df['track_clean'] = split_track[0].fillna('')
+        temp_df['artist_clean'] = split_track[1].fillna(temp_df['artist'])
+        temp_df['track_clean'] = temp_df['track_clean'].astype(str).str.strip().str.lower()
+        temp_df['artist_clean'] = temp_df['artist_clean'].astype(str).str.strip().str.lower()
+        temp_df['key'] = temp_df['track_clean'] + '|||' + temp_df['artist_clean']
+        filtered_track_keys = temp_df['key'][(temp_df['key'].notna()) & (temp_df['key'] != '|||')].drop_duplicates().tolist()
+    
+    {"df_dict": df_dict, "single_values": single_values, "filtered_track_keys": filtered_track_keys}
   `);
 
-  const dfDict = returns.get('df_dict').toJs();
-  const singleValues = returns.get('single_values').toJs();
+  const dfDictProxy = returns.get('df_dict');
+  const singleValuesProxy = returns.get('single_values');
+  const filteredTrackKeysProxy = returns.get('filtered_track_keys');
+  const dfDict = dfDictProxy.toJs();
+  const singleValues = singleValuesProxy.toJs();
+  const filteredTrackKeys = filteredTrackKeysProxy ? filteredTrackKeysProxy.toJs() : [];
+  dfDictProxy.destroy();
+  singleValuesProxy.destroy();
+  filteredTrackKeysProxy?.destroy();
 
   const dataCache: any = {};
   for (const [k, v] of Object.entries(dfDict)) {
     dataCache[k] = v;
   }
   dataCache['basics_dict'] = singleValues;
+  if (Array.isArray(filteredTrackKeys)) {
+    dataCache['filtered_track_keys'] = filteredTrackKeys;
+  }
 
   return { dataCache };
 }
