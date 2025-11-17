@@ -1,3 +1,4 @@
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 import type { DataFrameData, BasicStats } from '../types';
 
 export function formatNumber(num: number): string {
@@ -68,9 +69,14 @@ export function getPlotLayout(title: string, xUnit: string, yUnit: string, perce
     font: { family: 'Inter, system-ui, sans-serif', size: 14 },
     paper_bgcolor: 'transparent',
     plot_bgcolor: 'transparent',
-    margin: { l: 60, r: 40, b: 60, t: 60 },
+    margin: { l: 60, r: 40, b: 100, t: 60 }, // Aumentato il margin bottom per le date
     title: { text: title, font: { size: 18, color: '#1DB954' } },
-    xaxis: { title: { text: xUnit }, gridcolor: 'rgba(255,255,255,0.1)' },
+    xaxis: { 
+      title: { text: xUnit }, 
+      gridcolor: 'rgba(255,255,255,0.1)',
+      tickangle: -45, // Ruota le etichette delle date di 45 gradi
+      automargin: true, // Abilita il margine automatico per le etichette
+    },
     yaxis: { title: { text: yUnit }, rangemode: 'tozero', gridcolor: 'rgba(255,255,255,0.1)' },
   };
   

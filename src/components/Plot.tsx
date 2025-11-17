@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+// @ts-ignore
 import Plotly from 'plotly.js-dist-min';
 import type { DataFrameData } from '../types';
 import { getPlotLayout, getPlotConfig, selectTickInterval } from '../utils/dataProcessing';

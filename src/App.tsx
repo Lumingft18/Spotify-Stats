@@ -10,6 +10,7 @@ import { saveDataToStorage, loadDataFromStorage, clearStorage, saveFileToStorage
 function App() {
   const [dataCache, setDataCache] = useState<DataCache | null>(null);
   const [currentTab, setCurrentTab] = useState<TabName>('basics');
+  const [currentPeriod, setCurrentPeriod] = useState<PeriodType>('total');
   const [isUserData, setIsUserData] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [progress, setProgress] = useState('');
@@ -98,6 +99,7 @@ function App() {
     startDate?: Date,
     endDate?: Date
   ) => {
+    setCurrentPeriod(period);
     if (!dataCache) return;
 
     // Se è "totale", ripristina i dati originali senza bisogno di Pyodide
@@ -305,10 +307,11 @@ function App() {
           {dataCache && !isProcessing && (
             <div className="container mx-auto px-4 py-8 lg:px-8">
               <div className="bg-gradient-to-br from-gray-900/50 to-gray-800/50 rounded-2xl p-6 lg:p-10 border border-gray-800 shadow-2xl">
-                <StatsContent 
-                  tab={currentTab} 
-                  dataCache={dataCache} 
+                <StatsContent
+                  tab={currentTab}
+                  dataCache={dataCache}
                   isUserData={isUserData}
+                  currentPeriod={currentPeriod}
                 />
               </div>
             </div>

@@ -1,8 +1,40 @@
 import { loadPyodide } from 'pyodide';
 import type { PyodideInterface } from 'pyodide';
-import { getTracksAudioFeatures } from './acousticbrainz';
+import type { MoodAnalysisResult } from '../types';
+import { loadMoodResultsFromIndexedDB, saveMoodResultsToIndexedDB, saveMoodResultsMeta } from './storage';
 
 let pyodideInstance: PyodideInterface | null = null;
+
+async function getSavedMoodResults(): Promise<Map<string, MoodAnalysisResult>> {
+  const savedResults = new Map<string, MoodAnalysisResult>();
+  
+  try {
+    const savedResultsStr = localStorage.getItem('audio_features_results');
+    if (savedResultsStr) {
+      const saved = JSON.parse(savedResultsStr) as Array<{ key: string; result: MoodAnalysisResult }>;
+      saved.forEach(({ key, result }) => {
+        if (key && result) {
+          savedResults.set(key, result);
+        }
+      });
+    }
+  } catch (error) {
+    console.warn('[MoodResults] Errore nel leggere i risultati dal localStorage:', error);
+  }
+
+  try {
+    const indexedResults = await loadMoodResultsFromIndexedDB();
+    indexedResults.forEach(({ key, result }) => {
+      if (key && result) {
+        savedResults.set(key, result);
+      }
+    });
+  } catch (error) {
+    console.warn('[MoodResults] Errore nel leggere i risultati da IndexedDB:', error);
+  }
+
+  return savedResults;
+}
 
 export async function initPyodide(): Promise<PyodideInterface> {
   if (pyodideInstance) {
@@ -68,8 +100,8 @@ export async function processSpotifyData(file: File, onProgress: (step: string) 
   // - StreamingHistory_music_*.json (formato vecchio)
   // - Streaming_History_Audio_*.json (formato nuovo)
   // - Streaming_History_Video_*.json (video streaming)
-  const hasStreamingHistoryFiles = filenames.some(fn => 
-    fn.includes('StreamingHistory') || 
+  const hasStreamingHistoryFiles = filenames.some((fn: string) =>
+    fn.includes('StreamingHistory') ||
     fn.includes('streaming_history') ||
     fn.includes('Streaming_History_Audio') ||
     fn.includes('Streaming_History_Video')
@@ -204,8 +236,8 @@ export async function processSpotifyData(file: File, onProgress: (step: string) 
       df_unique['artist_clean'] = split_track[1].fillna(df_unique['artist'])
       df_unique['key'] = df_unique['track_clean'] + '|||' + df_unique['artist_clean']
       
-      # Ordina per play count e limita a max 1000 track (i più rilevanti)
-      df_unique = df_unique.sort_values('play_count', ascending=False).head(1000)
+      # Ordina per play count (i più rilevanti prima)
+      df_unique = df_unique.sort_values('play_count', ascending=False)
       
       df_unique[['key', 'artist_clean', 'track_clean']].to_dict('records')
     `);
@@ -264,110 +296,153 @@ export async function processSpotifyData(file: File, onProgress: (step: string) 
 }
 
 /**
- * Avvia manualmente il caricamento delle audio features
+ * Avvia l'analisi del mood usando AI con OpenRouter
  */
-export async function startManualAudioFeaturesLoad(
+export async function startAIMoodAnalysis(
   pyodide: PyodideInterface,
-  onProgress: (step: string) => void
+  apiKey: string,
+  onProgress: (current: number, total: number) => void
 ): Promise<void> {
   try {
+    console.log('[startAIMoodAnalysis] Inizio funzione');
+    
     // Carica i track salvati
     const tracksStr = localStorage.getItem('pending_audio_features_tracks');
     if (!tracksStr) {
-      throw new Error('Nessun track disponibile per il caricamento');
+      throw new Error('Nessun track disponibile per l\'analisi');
     }
     
+    console.log('[startAIMoodAnalysis] Track caricati dal localStorage');
+    
     const tracks = JSON.parse(tracksStr) as Array<{ key: string; artist_clean: string; track_clean: string }>;
+    
+    console.log(`[startAIMoodAnalysis] ${tracks.length} track trovati`);
     
     if (tracks.length === 0) {
       throw new Error('Nessun track da processare');
     }
     
-    // Avvia il caricamento
-    await loadAudioFeaturesInBackground(pyodide, tracks, onProgress);
-  } catch (error: any) {
-    console.error('Errore nel caricamento manuale delle audio features:', error);
-    throw error;
-  }
-}
-
-/**
- * Carica le audio features in background e aggiorna il DataFrame quando completato
- */
-async function loadAudioFeaturesInBackground(
-  pyodide: PyodideInterface,
-  tracks: Array<{ key: string; artist_clean: string; track_clean: string }>,
-  onProgress: (step: string) => void
-): Promise<void> {
-  try {
-    // Prepara i dati per AcousticBrainz
-    const tracksForAcousticBrainz = tracks.map(t => ({
-      artist: t.artist_clean || '',
-      track: t.track_clean || '',
-      key: t.key,
-    }));
-    
-    const { getTracksAudioFeatures, isCancelled } = await import('./acousticbrainz');
-    
-    // Mantieni traccia del progresso corrente per la cancellazione
-    let lastProgress = { current: 0, total: tracks.length, percent: 0 };
-    
-    // Crea un callback per aggiornare il progresso
-    const progressCallback = (current: number, total: number) => {
-      const percent = Math.round((current / total) * 100);
-      lastProgress = { current, total, percent };
-      onProgress(`Caricamento audio features: ${current}/${total} (${percent}%)`);
-      
-      // Salva il progresso nel localStorage per poterlo mostrare nella UI
-      try {
-        localStorage.setItem('audio_features_progress', JSON.stringify({
-          current,
-          total,
-          percent,
-        }));
-      } catch (e) {
-        // Ignora errori di localStorage
-      }
-    };
-    
-    const featuresMap = await getTracksAudioFeatures(tracksForAcousticBrainz, progressCallback);
-    
-    // Controlla se è stato cancellato
-    if (isCancelled()) {
-      // Il caricamento è stato cancellato - salva il progresso corrente
-      try {
-        localStorage.setItem('audio_features_progress', JSON.stringify({
-          ...lastProgress,
-          completed: true,
-          cancelled: true,
-        }));
-      } catch (e) {
-        // Ignora errori
-      }
-      onProgress('Caricamento audio features cancellato');
-      return;
+    // Carica i risultati già salvati (se presenti)
+    const savedResults = await getSavedMoodResults();
+    if (savedResults.size > 0) {
+      console.log(`[startAIMoodAnalysis] Caricati ${savedResults.size} risultati salvati`);
     }
     
-    // Aggiungi le audio features al DataFrame Python
+    // Filtra i track già processati
+    const tracksToProcess = tracks.filter(t => !savedResults.has(t.key));
+    const alreadyProcessed = tracks.length - tracksToProcess.length;
+    
+    console.log(`[startAIMoodAnalysis] ${alreadyProcessed} track già processati, ${tracksToProcess.length} da processare`);
+    
+    // Se tutti i track sono già stati processati, applica direttamente i risultati salvati
+    if (tracksToProcess.length === 0) {
+      console.log('[startAIMoodAnalysis] Tutti i track sono già stati processati, applico i risultati salvati');
+      // Aggiorna il progresso al 100%
+      onProgress(tracks.length, tracks.length);
+      // I risultati sono già in savedResults, continua con l'applicazione
+    } else {
+      // Prepara i dati per OpenRouter solo per i track da processare
+      const tracksForAI = tracksToProcess.map(t => ({
+        track: t.track_clean || '',
+        artist: t.artist_clean || '',
+        key: t.key,
+      }));
+      
+      console.log('[startAIMoodAnalysis] Dati preparati per OpenRouter');
+      
+      // Importa la funzione di analisi AI
+      const { analyzeMoodWithAI } = await import('./openrouter');
+      
+      console.log('[startAIMoodAnalysis] Funzione analyzeMoodWithAI importata');
+      
+      // Il flag di cancellazione viene resettato automaticamente da initOpenRouterClient
+      
+      // Esegui l'analisi AI solo per i track rimanenti
+      console.log('[startAIMoodAnalysis] Chiamata a analyzeMoodWithAI...');
+      const newResultsMap = await analyzeMoodWithAI(
+        tracksForAI,
+        {
+          apiKey,
+          model: "google/gemini-2.0-flash-001",
+          siteUrl: window.location.origin,
+          siteName: "Spotify Stats",
+        },
+        (current, _total) => {
+          // Aggiorna il progresso includendo i track già processati
+          onProgress(alreadyProcessed + current, tracks.length);
+        }
+      );
+      
+      // Unisci i nuovi risultati con quelli salvati
+      newResultsMap.forEach((result, key) => {
+        savedResults.set(key, result);
+      });
+      
+      // I risultati sono già stati salvati incrementally durante l'analisi
+      console.log(`[startAIMoodAnalysis] Completati ${savedResults.size} risultati totali`);
+    }
+    
+    // Usa la mappa completa dei risultati (salvati + nuovi)
+    const resultsMap = savedResults;
+    
+    // Converti i risultati in formato compatibile con il DataFrame Python
+    // Converti null in None per Python e assicurati che tutti i valori siano numerici o None
     const featuresArray = tracks.map(t => {
-      const features = featuresMap.get(t.key);
-      if (features) {
+      const result = resultsMap.get(t.key);
+      if (result) {
         return {
           key: t.key,
-          valence: features.valence,
-          energy: features.energy || null,
-          danceability: features.danceability || null,
-          tempo: features.tempo || null,
+          valence: result.valence,
+          energy: result.energy !== undefined ? result.energy : null,
+          danceability: result.danceability !== undefined ? result.danceability : null,
+          tempo: null, // L'AI non fornisce tempo
         };
       }
       return null;
     }).filter(f => f !== null);
     
     if (featuresArray.length > 0) {
-      pyodide.globals.set('audio_features_data', featuresArray);
+      // Prepara i dati per Python, convertendo null in None
+      const featuresForPython = featuresArray.map(f => {
+        const row: any = {
+          key: f.key,
+          valence: f.valence,
+        };
+        // Aggiungi solo i campi che hanno valori, altrimenti None
+        row.energy = f.energy !== null && f.energy !== undefined ? f.energy : null;
+        row.danceability = f.danceability !== null && f.danceability !== undefined ? f.danceability : null;
+        row.tempo = null;
+        return row;
+      });
+      
+      // Converti in JSON per una conversione più affidabile in Python
+      const featuresJson = JSON.stringify(featuresForPython);
+      pyodide.globals.set('audio_features_json', featuresJson);
       await pyodide.runPythonAsync(`
         import pandas as pd
+        import numpy as np
+        import json
+        
+        # Converti il JSON in una lista Python
+        audio_features_data = json.loads(audio_features_json)
+        
+        # Crea il DataFrame dalla lista di dizionari
+        # pandas gestirà automaticamente la conversione da null a NaN
         features_df = pd.DataFrame(audio_features_data)
+        
+        # Converti le colonne numeriche, sostituendo None/null con NaN
+        for col in ['valence', 'energy', 'danceability', 'tempo']:
+            if col in features_df.columns:
+                features_df[col] = pd.to_numeric(features_df[col], errors='coerce')
+        
+        # Rimuovi eventuali righe duplicate per chiave
+        features_df = features_df.drop_duplicates(subset=['key'], keep='first')
+
+        # Rimuovi vecchie colonne per evitare dupliche
+        cols_to_drop = [col for col in ['valence', 'energy', 'danceability', 'tempo', 'mood'] if col in df.columns]
+        if cols_to_drop:
+            df = df.drop(columns=cols_to_drop)
+
         # Crea la chiave anche nel DataFrame principale
         split_track = df['track'].str.split('~~sep~~', n=1, expand=True)
         df['track_clean'] = split_track[0]
@@ -375,6 +450,13 @@ async function loadAudioFeaturesInBackground(
         df['key'] = df['track_clean'] + '|||' + df['artist_clean']
         df = df.merge(features_df[['key', 'valence', 'energy', 'danceability', 'tempo']], on='key', how='left')
         df = df.drop(columns=['key', 'track_clean', 'artist_clean'])
+
+        # Calcola/aggiorna il mood
+        if 'valence' in df.columns:
+            df['mood'] = df['valence'].apply(classify_mood)
+        else:
+            df['mood'] = None
+
         original_df = df.copy()
         
         # Ricalcola le statistiche con le nuove features
@@ -402,8 +484,19 @@ async function loadAudioFeaturesInBackground(
       const { saveDataToStorage } = await import('./storage');
       saveDataToStorage(updatedDataCache);
       
-      // Notifica che il caricamento è completato
-      onProgress(`Audio features completate: ${featuresArray.length}/${tracks.length} track trovati`);
+      // Mantieni i risultati salvati nel localStorage anche dopo il completamento
+      try {
+        const resultsToSave = Array.from(resultsMap.entries()).map(([key, result]) => ({
+          key,
+          result,
+        }));
+        localStorage.setItem('audio_features_results', JSON.stringify(resultsToSave));
+        console.log(`[startAIMoodAnalysis] Risultati finali salvati: ${resultsMap.size} risultati`);
+        await saveMoodResultsToIndexedDB(resultsToSave);
+      } catch (e) {
+        console.warn('[startAIMoodAnalysis] Errore nel salvare i risultati finali:', e);
+      }
+      saveMoodResultsMeta(resultsMap.size);
       
       // Salva il completamento
       try {
@@ -414,6 +507,9 @@ async function loadAudioFeaturesInBackground(
           completed: true,
         }));
         
+        // Salva anche un flag che indica che l'analisi è completa e i dati sono pronti
+        localStorage.setItem('audio_features_completed', 'true');
+        
         // Triggera un evento custom per notificare l'aggiornamento
         window.dispatchEvent(new CustomEvent('audioFeaturesUpdated', { 
           detail: { dataCache: updatedDataCache } 
@@ -422,20 +518,10 @@ async function loadAudioFeaturesInBackground(
         // Ignora errori
       }
     } else {
-      onProgress('Nessuna audio feature trovata su AcousticBrainz');
-      try {
-        localStorage.setItem('audio_features_progress', JSON.stringify({
-          current: 0,
-          total: tracks.length,
-          percent: 0,
-          completed: true,
-        }));
-      } catch (e) {
-        // Ignora errori
-      }
+      throw new Error('Nessun risultato ottenuto dall\'analisi AI');
     }
   } catch (error: any) {
-    console.error('Errore nel caricamento background delle audio features:', error);
+    console.error('Errore nell\'analisi AI del mood:', error);
     try {
       localStorage.setItem('audio_features_progress', JSON.stringify({
         error: error.message || 'Errore sconosciuto',
@@ -444,6 +530,7 @@ async function loadAudioFeaturesInBackground(
     } catch (e) {
       // Ignora errori
     }
+    throw error;
   }
 }
 
@@ -457,6 +544,12 @@ export async function filterDataByPeriod(
   const endDateStr = endDate.toISOString().split('T')[0];
 
   onProgress('Filtro dati per periodo...');
+  
+  // Carica i risultati dell'analisi mood salvati (se presenti)
+  const savedResults = await getSavedMoodResults();
+  if (savedResults.size > 0) {
+    console.log(`[filterDataByPeriod] Caricati ${savedResults.size} risultati mood salvati`);
+  }
   
   await pyodide.runPythonAsync(`
     import pandas as pd
@@ -474,6 +567,119 @@ export async function filterDataByPeriod(
     # Ricalcola le statistiche con i dati filtrati
     top_k = 20
   `);
+
+  // Se ci sono risultati mood salvati, applicali al DataFrame filtrato
+  if (savedResults.size > 0) {
+    onProgress('Applicazione risultati mood salvati...');
+    
+    // Carica i track per ottenere le chiavi
+    const tracksStr = localStorage.getItem('pending_audio_features_tracks');
+    if (tracksStr) {
+      const tracks = JSON.parse(tracksStr) as Array<{ key: string; artist_clean: string; track_clean: string }>;
+      
+      // Prepara i dati per Python solo per i track che hanno risultati salvati
+      const featuresArray = tracks
+        .filter(t => savedResults.has(t.key))
+        .map(t => {
+          const result = savedResults.get(t.key)!;
+          return {
+            key: t.key,
+            valence: result.valence,
+            energy: result.energy !== undefined ? result.energy : null,
+            danceability: result.danceability !== undefined ? result.danceability : null,
+            tempo: null,
+          };
+        });
+      
+      if (featuresArray.length > 0) {
+        const featuresForPython = featuresArray.map(f => {
+          const row: any = {
+            key: f.key,
+            valence: f.valence,
+          };
+          row.energy = f.energy !== null && f.energy !== undefined ? f.energy : null;
+          row.danceability = f.danceability !== null && f.danceability !== undefined ? f.danceability : null;
+          row.tempo = null;
+          return row;
+        });
+        
+        const featuresJson = JSON.stringify(featuresForPython);
+        pyodide.globals.set('audio_features_json', featuresJson);
+        await pyodide.runPythonAsync(`
+          import pandas as pd
+          import numpy as np
+          import json
+          
+          # Converti il JSON in una lista Python
+          audio_features_data = json.loads(audio_features_json)
+          
+          # Crea il DataFrame dalla lista di dizionari
+          features_df = pd.DataFrame(audio_features_data)
+          
+          # Converti le colonne numeriche, sostituendo None/null con NaN
+          for col in ['valence', 'energy', 'danceability', 'tempo']:
+              if col in features_df.columns:
+                  features_df[col] = pd.to_numeric(features_df[col], errors='coerce')
+          
+          # Rimuovi eventuali righe duplicate per chiave
+          features_df = features_df.drop_duplicates(subset=['key'], keep='first')
+
+          # Elimina eventuali colonne precedenti per evitare duplicati
+          cols_to_drop = [col for col in ['valence', 'energy', 'danceability', 'tempo', 'mood'] if col in df_filtered.columns]
+          if cols_to_drop:
+              df_filtered = df_filtered.drop(columns=cols_to_drop)
+          
+          # Crea la chiave anche nel DataFrame filtrato
+          split_track = df_filtered['track'].str.split('~~sep~~', n=1, expand=True)
+          df_filtered['track_clean'] = split_track[0]
+          df_filtered['artist_clean'] = split_track[1].fillna(df_filtered['artist'])
+          df_filtered['key'] = df_filtered['track_clean'] + '|||' + df_filtered['artist_clean']
+          
+          # Applica i risultati mood al DataFrame filtrato
+          df_filtered = df_filtered.merge(features_df[['key', 'valence', 'energy', 'danceability', 'tempo']], on='key', how='left')
+          
+          # Assicurati che la colonna valence esista anche se il merge non ha trovato corrispondenze
+          if 'valence' not in df_filtered.columns:
+              df_filtered['valence'] = None
+          
+          df_filtered = df_filtered.drop(columns=['key', 'track_clean', 'artist_clean'])
+
+          if 'valence' in df_filtered.columns:
+              df_filtered['mood'] = df_filtered['valence'].apply(classify_mood)
+          else:
+              df_filtered['mood'] = None
+        `);
+        console.log(`[filterDataByPeriod] Applicati ${featuresArray.length} risultati mood al DataFrame filtrato`);
+      } else {
+        // Se non ci sono risultati da applicare ma ci sono risultati salvati, 
+        // significa che nel periodo filtrato non ci sono canzoni con risultati mood
+        // Ma dobbiamo comunque assicurarci che la colonna valence esista per generare le statistiche
+        console.log(`[filterDataByPeriod] Nessun risultato mood da applicare nel periodo filtrato`);
+        // Crea comunque la colonna valence vuota per permettere la generazione delle statistiche
+        await pyodide.runPythonAsync(`
+          if 'valence' not in df_filtered.columns:
+              df_filtered['valence'] = None
+          if 'valence' in df_filtered.columns:
+              df_filtered['mood'] = df_filtered['valence'].apply(classify_mood)
+          else:
+              df_filtered['mood'] = None
+        `);
+      }
+    } else {
+      // Se ci sono risultati salvati ma non ci sono track, potrebbe essere un problema
+      // Ma comunque dobbiamo assicurarci che la colonna valence esista se ci sono risultati salvati
+      console.log(`[filterDataByPeriod] Nessun track disponibile per applicare i risultati mood`);
+      // Crea comunque la colonna valence vuota per permettere la generazione delle statistiche
+      await pyodide.runPythonAsync(`
+        if 'valence' not in df_filtered.columns:
+            df_filtered['valence'] = None
+        if 'valence' in df_filtered.columns:
+            df_filtered['mood'] = df_filtered['valence'].apply(classify_mood)
+        else:
+            df_filtered['mood'] = None
+      `);
+    }
+  }
 
   onProgress('Ricalcolo statistiche...');
   await pyodide.runPythonAsync('df_dict = get_df_dict(df_filtered, top_k)');

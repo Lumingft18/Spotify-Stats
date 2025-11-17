@@ -17,6 +17,8 @@ export interface AudioFeatures {
   time_signature?: number;
 }
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 interface SpotifyAudioFeatures extends AudioFeatures {
   energy: number;
   danceability: number;

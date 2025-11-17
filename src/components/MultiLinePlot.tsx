@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+// @ts-ignore
 import Plotly from 'plotly.js-dist-min';
 import type { DataFrameData } from '../types';
 import { getPlotLayout, getPlotConfig } from '../utils/dataProcessing';
@@ -33,6 +34,18 @@ export function MultiLinePlot({
     const xIndex = data.columns.indexOf(xCol);
     const x = data.data.map((row) => row[xIndex]);
 
+    // Funzione per formattare i nomi delle colonne
+    const formatColumnName = (colName: string): string => {
+      // Gestisci i nomi delle colonne del mood
+      if (colName === 'felice_percent') return 'Felice';
+      if (colName === 'neutrale_percent') return 'Neutrale';
+      if (colName === 'triste_percent') return 'Triste';
+      if (colName === 'sconosciuto_percent') return 'Sconosciuto';
+      
+      // Gestisci altri casi comuni
+      return colName.replaceAll(' by ', ' by<br>').replace(/_/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase());
+    };
+
     const traces: any[] = yCols.map((yCol) => {
       const yIndex = data.columns.indexOf(yCol);
       const y = data.data.map((row) => row[yIndex]);
@@ -41,7 +54,7 @@ export function MultiLinePlot({
         x,
         y,
         mode: barChart ? undefined : 'lines',
-        name: yCol.replaceAll(' by ', ' by<br>'),
+        name: formatColumnName(yCol),
         hovertemplate: `%{x}<br>%{y:,} ${yUnit}<extra></extra>`,
       };
 

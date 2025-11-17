@@ -1170,7 +1170,17 @@ def get_mood_statistics(df):
     mood_by_day_pivot.index = pd.Categorical(mood_by_day_pivot.index, categories=weekdays_order, ordered=True)
     mood_by_day_pivot = mood_by_day_pivot.sort_index().reset_index()
     out['mood_per_day_of_week'] = mood_by_day_pivot
-    
+
+    # Mood per giorno (data specifica)
+    mood_daily = df_full.groupby(['year_month_day', 'mood']).size().reset_index(name='conteggio')
+    mood_daily_pivot = mood_daily.pivot(index='year_month_day', columns='mood', values='conteggio').fillna(0)
+    mood_daily_pivot['totale'] = mood_daily_pivot.sum(axis=1)
+    for mood in ['felice', 'neutrale', 'triste']:
+        if mood in mood_daily_pivot.columns:
+            mood_daily_pivot[f'{mood}_percent'] = round(mood_daily_pivot[mood] / mood_daily_pivot['totale'] * 100, 2)
+    mood_daily_pivot = mood_daily_pivot.reset_index().sort_values('year_month_day')
+    out['mood_per_day'] = mood_daily_pivot
+
     return out
 
 

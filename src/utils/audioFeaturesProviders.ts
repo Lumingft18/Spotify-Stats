@@ -27,7 +27,8 @@ export interface ProviderConfig {
 /**
  * Estrae l'ID del track da un URI di Spotify
  */
-function extractSpotifyTrackId(uri: string): string | null {
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+function _extractSpotifyTrackId(uri: string): string | null {
   if (!uri || uri === 'None' || uri === '') {
     return null;
   }

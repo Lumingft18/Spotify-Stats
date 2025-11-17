@@ -39,7 +39,7 @@ export function abortAllRequests(): void {
 /**
  * Usa un proxy CORS per fare richieste a API che non supportano CORS
  */
-async function fetchWithCorsProxy(url: string, options: RequestInit = {}, signal?: AbortSignal): Promise<Response> {
+async function fetchWithCorsProxy(url: string, _options: RequestInit = {}, signal?: AbortSignal): Promise<Response> {
   // Controlla se è stato cancellato prima di fare la richiesta
   if (isCancelled() || signal?.aborted) {
     throw new Error('Richiesta cancellata');

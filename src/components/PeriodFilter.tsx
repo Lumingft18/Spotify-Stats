@@ -14,8 +14,8 @@ interface PeriodFilterProps {
   disabled?: boolean;
 }
 
-export function PeriodFilter({ onPeriodChange, disabled = false, defaultPeriod = 'total' }: PeriodFilterProps) {
-  const [selectedPeriod, setSelectedPeriod] = useState<PeriodType>(defaultPeriod);
+export function PeriodFilter({ onPeriodChange, disabled = false }: PeriodFilterProps) {
+  const [selectedPeriod, setSelectedPeriod] = useState<PeriodType>('total');
   const [showCustomPicker, setShowCustomPicker] = useState(false);
   const [customStartDate, setCustomStartDate] = useState('');
   const [customEndDate, setCustomEndDate] = useState('');
@@ -91,26 +91,6 @@ export function PeriodFilter({ onPeriodChange, disabled = false, defaultPeriod =
     return { startDate, endDate };
   };
 
-  const getPeriodLabel = (period: PeriodType): string => {
-    switch (period) {
-      case 'total':
-        return 'Totale';
-      case 'this_month':
-        return 'Questo mese';
-      case 'last_3_months':
-        return 'Ultimi 3 mesi';
-      case 'last_6_months':
-        return 'Ultimi 6 mesi';
-      case 'last_9_months':
-        return 'Ultimi 9 mesi';
-      case 'last_year':
-        return "Anno scorso";
-      case 'custom':
-        return 'Personalizzato';
-      default:
-        return 'Totale';
-    }
-  };
 
   return (
     <div className="relative">

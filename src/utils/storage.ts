@@ -1,10 +1,18 @@
-import type { DataCache } from '../types';
+import type { DataCache, MoodAnalysisResult } from '../types';
 
 const STORAGE_KEY = 'spotify_stats_data';
 const FILE_STORAGE_KEY = 'spotify_stats_file';
 const DB_NAME = 'spotify_stats_db';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const STORE_NAME = 'files';
+const MOOD_STORE_NAME = 'mood_results';
+const AUDIO_RESULTS_KEY = 'audio_features_results';
+const AUDIO_RESULTS_META_KEY = 'audio_features_results_meta';
+
+export interface StoredMoodResult {
+  key: string;
+  result: MoodAnalysisResult;
+}
 
 // Funzioni per IndexedDB
 function openDB(): Promise<IDBDatabase> {
@@ -18,6 +26,9 @@ function openDB(): Promise<IDBDatabase> {
       const db = (event.target as IDBOpenDBRequest).result;
       if (!db.objectStoreNames.contains(STORE_NAME)) {
         db.createObjectStore(STORE_NAME);
+      }
+      if (!db.objectStoreNames.contains(MOOD_STORE_NAME)) {
+        db.createObjectStore(MOOD_STORE_NAME, { keyPath: 'key' });
       }
     };
   });
@@ -48,6 +59,13 @@ export function clearStorage(): void {
     localStorage.removeItem(STORAGE_KEY);
     localStorage.removeItem(FILE_STORAGE_KEY);
     localStorage.removeItem(`${FILE_STORAGE_KEY}_name`);
+    localStorage.removeItem(`${FILE_STORAGE_KEY}_storage`);
+    localStorage.removeItem(AUDIO_RESULTS_KEY);
+    localStorage.removeItem(AUDIO_RESULTS_META_KEY);
+    localStorage.removeItem('pending_audio_features_tracks');
+    localStorage.removeItem('pending_audio_features_pyodide_available');
+    localStorage.removeItem('audio_features_progress');
+    localStorage.removeItem('audio_features_completed');
     
     // Pulisci anche IndexedDB
     openDB().then((db) => {
@@ -57,6 +75,10 @@ export function clearStorage(): void {
       db.close();
     }).catch((err) => {
       console.error('Errore nella pulizia di IndexedDB:', err);
+    });
+
+    clearMoodResultsFromIndexedDB().catch((err) => {
+      console.error('Errore nella pulizia dei dati mood:', err);
     });
   } catch (error) {
     console.error('Errore nella pulizia dello storage:', error);
@@ -154,6 +176,103 @@ export async function loadFileFromStorage(): Promise<File | null> {
     }
   } catch (error) {
     console.error('Errore nel caricamento del file:', error);
+  }
+  return null;
+}
+
+export async function saveMoodResultsToIndexedDB(results: StoredMoodResult[]): Promise<void> {
+  if (!results.length) {
+    return;
+  }
+  try {
+    const db = await openDB();
+    await new Promise<void>((resolve, reject) => {
+      const transaction = db.transaction([MOOD_STORE_NAME], 'readwrite');
+      const store = transaction.objectStore(MOOD_STORE_NAME);
+      transaction.oncomplete = () => {
+        db.close();
+        resolve();
+      };
+      transaction.onerror = () => {
+        const error = transaction.error;
+        db.close();
+        reject(error);
+      };
+      results.forEach((record) => {
+        store.put(record);
+      });
+    });
+  } catch (error) {
+    console.error('Errore nel salvataggio dei risultati mood su IndexedDB:', error);
+  }
+}
+
+export async function loadMoodResultsFromIndexedDB(): Promise<StoredMoodResult[]> {
+  try {
+    const db = await openDB();
+    return await new Promise<StoredMoodResult[]>((resolve, reject) => {
+      const transaction = db.transaction([MOOD_STORE_NAME], 'readonly');
+      const store = transaction.objectStore(MOOD_STORE_NAME);
+      const request = store.getAll();
+      request.onsuccess = () => {
+        const value = (request.result as StoredMoodResult[]) || [];
+        db.close();
+        resolve(value);
+      };
+      request.onerror = () => {
+        const error = request.error;
+        db.close();
+        reject(error);
+      };
+    });
+  } catch (error) {
+    console.error('Errore nel caricamento dei risultati mood da IndexedDB:', error);
+    return [];
+  }
+}
+
+export async function clearMoodResultsFromIndexedDB(): Promise<void> {
+  try {
+    const db = await openDB();
+    await new Promise<void>((resolve, reject) => {
+      const transaction = db.transaction([MOOD_STORE_NAME], 'readwrite');
+      const store = transaction.objectStore(MOOD_STORE_NAME);
+      const request = store.clear();
+      request.onsuccess = () => {
+        db.close();
+        resolve();
+      };
+      request.onerror = () => {
+        const error = request.error;
+        db.close();
+        reject(error);
+      };
+    });
+  } catch (error) {
+    console.error('Errore nella pulizia dei risultati mood da IndexedDB:', error);
+  }
+}
+
+export function saveMoodResultsMeta(count: number): void {
+  try {
+    const payload = {
+      count,
+      updatedAt: Date.now(),
+    };
+    localStorage.setItem(AUDIO_RESULTS_META_KEY, JSON.stringify(payload));
+  } catch (error) {
+    console.warn('Impossibile salvare i metadati dei risultati mood:', error);
+  }
+}
+
+export function loadMoodResultsMeta(): { count: number; updatedAt: number } | null {
+  try {
+    const metaStr = localStorage.getItem(AUDIO_RESULTS_META_KEY);
+    if (metaStr) {
+      return JSON.parse(metaStr) as { count: number; updatedAt: number };
+    }
+  } catch (error) {
+    console.warn('Impossibile leggere i metadati dei risultati mood:', error);
   }
   return null;
 }

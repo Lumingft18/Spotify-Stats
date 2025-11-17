@@ -3,6 +3,16 @@ export interface DataFrameData {
   data: (string | number)[][];
 }
 
+export interface MoodAnalysisResult {
+  track: string;
+  artist: string;
+  valence: number;
+  energy?: number;
+  danceability?: number;
+  mood_category?: 'felice' | 'neutrale' | 'triste' | 'sconosciuto';
+  confidence?: number;
+}
+
 export interface BasicStats {
   first_day: string;
   last_day: string;

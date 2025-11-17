@@ -1,4 +1,5 @@
 import type { DataCache, BasicStats, TabName } from '../types';
+import type { PeriodType } from './PeriodFilter';
 import { DataTable } from './DataTable';
 import { Plot } from './Plot';
 import { MultiLinePlot } from './MultiLinePlot';
@@ -10,9 +11,10 @@ interface StatsContentProps {
   tab: TabName;
   dataCache: DataCache;
   isUserData: boolean;
+  currentPeriod: PeriodType;
 }
 
-export function StatsContent({ tab, dataCache, isUserData }: StatsContentProps) {
+export function StatsContent({ tab, dataCache, isUserData, currentPeriod }: StatsContentProps) {
   const basicsDict = dataCache['basics_dict'] as BasicStats;
 
   const renderContent = () => {
@@ -266,7 +268,7 @@ export function StatsContent({ tab, dataCache, isUserData }: StatsContentProps) 
       }
 
       case 'mood':
-        return <MoodContent dataCache={dataCache} />;
+        return <MoodContent dataCache={dataCache} currentPeriod={currentPeriod} />;
 
       case 'skipped analysis': {
         const skippedOverview = dataCache['skipped_overview'] as any;

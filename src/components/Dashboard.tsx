@@ -10,7 +10,7 @@ export function Dashboard({ stats }: DashboardProps) {
     {
       title: 'Tempo totale di ascolto',
       value: `${Math.floor(stats.listening_hours)}h`,
-      subtitle: `${formatNumber(stats.listening_hours_per_day)}h al giorno`,
+      subtitle: `${stats.listening_hours_per_day}h al giorno`,
       icon: '🎵',
       color: 'from-green-500 to-emerald-600',
     },
@@ -166,4 +166,8 @@ export function Dashboard({ stats }: DashboardProps) {
     </div>
   );
 }
+
+
+
+
 
