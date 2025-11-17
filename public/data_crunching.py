@@ -350,9 +350,19 @@ def preprocess_df(df):
 
 def df_dict_to_df_json_dict(df_dict):
     for name, df in df_dict.items():
-        df = df.round(2)
-        df_dict[name] = df.to_dict(orient="split")
-        del df_dict[name]["index"]
+        # Se è una lista (come i dati mensili), salvala direttamente senza conversioni
+        if isinstance(df, list):
+            df_dict[name] = df
+            continue
+        # Se è un DataFrame, convertilo normalmente
+        if hasattr(df, 'round'):
+            df = df.round(2)
+            df_dict[name] = df.to_dict(orient="split")
+            if "index" in df_dict[name]:
+                del df_dict[name]["index"]
+        else:
+            # Se non è un DataFrame, salvalo così com'è
+            df_dict[name] = df
 
 
 def replace_track_artist(df):
@@ -498,15 +508,20 @@ def get_monthly_play_images(df, column_name):
 
     names = []
     images = []
+    monthly_data_list = []
     for name, group in name_groups:
         names.append(name)
         image = np.ones((image_width, 40), dtype=np.uint8) * 210
+        monthly_data = []
         for index, value in zip(group["month_index"], group["count"]):
             image[index, 40 - min(int(np.round(value * y_value_multiplier)), 40) :] = 0
+            # Salva anche i dati mensili per il grafico Plotly
+            monthly_data.append({"month_index": int(index), "count": int(value)})
         images.append(f"data:image/bmp;base64,{numpy_to_base64_bmp(image.T)}")
+        monthly_data_list.append({column_name: name, "monthly_data": monthly_data})
 
     df = pd.DataFrame({column_name: names, f"monthly play count<br>(up to {int(40/y_value_multiplier)} plays)": images})
-    return df
+    return df, monthly_data_list
 
 
 def get_most_played_artists_tracks_albums_total(
@@ -522,11 +537,30 @@ def get_most_played_artists_tracks_albums_total(
             artist_track_count = df.groupby("artist")["track"].nunique().to_dict()
             df_top["# of unique tracks played"] = df_top["artist"].map(artist_track_count)
 
-        df_image = get_monthly_play_images(
+        df_image, monthly_data_list = get_monthly_play_images(
             df[(df[column_name].isin(df_top[column_name])) & df["full_play"]], column_name
         )
         df_top = pd.merge(df_top, df_image, on=column_name)
         df_dict[f"most_played_{column_name}s_total{suffix}"] = df_top
+        
+        # Salva anche i dati mensili per creare grafici Plotly interattivi
+        month_list = sorted(df["year_month"].unique())
+        monthly_charts_data = []
+        for item in monthly_data_list:
+            name = item[column_name]
+            monthly_data = item["monthly_data"]
+            # Crea un DataFrame con i dati mensili
+            chart_rows = []
+            for month_idx, month_str in enumerate(month_list):
+                count = 0
+                for md in monthly_data:
+                    if md["month_index"] == month_idx:
+                        count = md["count"]
+                        break
+                chart_rows.append({"month": month_str, "play_count": count})
+            monthly_charts_data.append({column_name: name, "data": chart_rows})
+        
+        df_dict[f"most_played_{column_name}s_monthly_data{suffix}"] = monthly_charts_data
     return df_dict
 
 

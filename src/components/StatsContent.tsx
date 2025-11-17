@@ -23,32 +23,50 @@ export function StatsContent({ tab, dataCache, isUserData, currentPeriod }: Stat
         return <Dashboard stats={basicsDict} />;
       }
 
-      case 'most played artists':
+      case 'most played artists': {
+        const monthlyData = dataCache['most_played_artists_monthly_data'] as any;
+        console.log('[StatsContent] most_played_artists_monthly_data:', monthlyData);
         return (
           <DataTable
             title="Artisti più riprodotti"
             data={dataCache['most_played_artists_total'] as any}
             showRank={true}
+            monthlyDataCache={{
+              most_played_artists_monthly_data: monthlyData
+            }}
           />
         );
+      }
 
-      case 'most played songs':
+      case 'most played songs': {
+        const monthlyData = dataCache['most_played_tracks_monthly_data'] as any;
+        console.log('[StatsContent] most_played_tracks_monthly_data:', monthlyData);
         return (
           <DataTable
             title="Canzoni più riprodotte"
             data={dataCache['most_played_tracks_total'] as any}
             showRank={true}
+            monthlyDataCache={{
+              most_played_tracks_monthly_data: monthlyData
+            }}
           />
         );
+      }
 
-      case 'most played albums':
+      case 'most played albums': {
+        const monthlyData = dataCache['most_played_albums_monthly_data'] as any;
+        console.log('[StatsContent] most_played_albums_monthly_data:', monthlyData);
         return (
           <DataTable
             title="Album più riprodotti"
             data={dataCache['most_played_albums_total'] as any}
             showRank={true}
+            monthlyDataCache={{
+              most_played_albums_monthly_data: monthlyData
+            }}
           />
         );
+      }
 
       case 'most played per month':
         return (
