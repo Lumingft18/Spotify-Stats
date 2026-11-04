@@ -4,7 +4,7 @@ import { runStep, stopStep, STEPS, type StepId } from '../enrichment/jobs';
 import { Button, cx, Meter } from './ui';
 import { fmtInt } from '../lib/format';
 
-const PER_ITEM_SECONDS: Partial<Record<StepId, number>> = { lyrics: 0.8, tags: 1.3, covers: 0.35 };
+const PER_ITEM_SECONDS: Partial<Record<StepId, number>> = { lyrics: 0.45, tags: 1.3, covers: 0.35 };
 function eta(id: StepId, remaining: number): string | null {
   const s = PER_ITEM_SECONDS[id];
   if (!s || remaining <= 0) return null;

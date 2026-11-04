@@ -75,12 +75,12 @@ export const STEPS: Record<StepId, StepDef> = {
     connection: 'lyrics',
     column: 'lyrics',
     batch: 1,
-    // LRCLIB asks for sequential requests with a short pause (≈90/min for identified clients).
+    // LRCLIB asks for sequential requests with a short pause; registered app ≈180/min.
     concurrency: 1,
     filter: `t.plays >= 2`,
     run: async (items, s) => {
       const out = await one(fetchLyrics)(items, s);
-      await sleep(650, s).catch(() => undefined);
+      await sleep(250, s).catch(() => undefined);
       return out;
     },
   },
@@ -253,7 +253,7 @@ function runAllEnabledNow() {
   if (s.connections.covers) void runStep('covers');
   if (s.connections.audiofeatures) void runStep('audiofeatures');
   // Most-listened first; ~10–15 min each at the providers' polite rates. "Avvia" in Attività continues past these caps.
-  if (s.connections.lyrics) void runStep('lyrics', 800);
+  if (s.connections.lyrics) void runStep('lyrics', 1500);
   if (s.connections.lastfm) void runStep('tags', s.lastfmKey ? 3000 : 600);
 }
 

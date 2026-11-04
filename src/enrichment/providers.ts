@@ -63,7 +63,12 @@ export async function fetchAudioFeatures(batch: TrackRef[], signal: AbortSignal)
     .filter(Boolean) as MetaRow[];
 }
 
-const LRCLIB_HEADERS = { 'Lrclib-Client': 'Ascolti/2.0 (https://github.com/Lumingft18/Spotify-Stats)' };
+// Registered client-side app (public ID, safe to ship): ~180 req/min instead of ~45.
+// Authorization: https://lrclib.net/developers/authorizations/adlfM5TYmaE-g5-OYvl6q90ReuPMly_3GZkaQzYZDFU
+const LRCLIB_HEADERS = {
+  'Lrclib-App-Id': 'adlfM5TYmaE-g5-OYvl6q90ReuPMly_3GZkaQzYZDFU',
+  'Lrclib-Client': 'Ascolti/2.0 (https://github.com/Lumingft18/Spotify-Stats)',
+};
 const norm = (x: string) =>
   x
     .toLowerCase()
