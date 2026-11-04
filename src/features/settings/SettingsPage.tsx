@@ -15,7 +15,7 @@ const CONNECTIONS: Array<{ id: ConnectionId; title: string; host: string; sends:
   { id: 'covers', title: 'Copertine', host: 'open.spotify.com (oEmbed)', sends: 'ID dei brani, uno alla volta' },
   { id: 'audiofeatures', title: 'Audio features (valence, energia, tempo)', host: 'api.reccobeats.com', sends: 'ID Spotify dei brani, a blocchi di 40' },
   { id: 'lyrics', title: 'Testi', host: 'lrclib.net', sends: 'titolo, artista, album e durata dei brani più ascoltati' },
-  { id: 'lastfm', title: 'Tag e generi', host: 'ws.audioscrobbler.com (Last.fm)', sends: 'titolo e artista; richiede la tua chiave API' },
+  { id: 'lastfm', title: 'Tag e generi', host: 'musicbrainz.org (o Last.fm se inserisci la chiave)', sends: 'nome degli artisti (MusicBrainz) oppure titolo e artista (Last.fm)' },
   { id: 'llm', title: 'Funzioni AI (mappa del gusto, mood, nomi, assistente)', host: 'openrouter.ai', sends: 'titoli, artisti, album, tag, estratti di testo e risultati delle query; mai lo storico completo' },
 ];
 

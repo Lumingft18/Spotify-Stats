@@ -11,7 +11,7 @@ import { runAllEnabled } from '../enrichment/jobs';
 async function hydrateFromCatalog() {
   const missing = await query<{ uri: string }>(
     `SELECT t.uri FROM tracks t LEFT JOIN meta m USING (uri)
-     WHERE t.uri LIKE 'spotify:track:%' AND (m.cover IS NULL OR m.valence IS NULL)`,
+     WHERE t.uri LIKE 'spotify:track:%' AND (m.cover IS NULL OR m.valence IS NULL OR m.lyrics IS NULL OR m.tags IS NULL)`,
   );
   const cached = await readCatalog(missing.map((m) => m.uri));
   if (cached.length) await upsertMeta(cached);

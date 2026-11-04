@@ -63,24 +63,70 @@ export async function fetchAudioFeatures(batch: TrackRef[], signal: AbortSignal)
     .filter(Boolean) as MetaRow[];
 }
 
-/** Plain lyrics from LRCLIB (free, no key). Returns '' when not found so we don't retry forever. */
+const LRCLIB_HEADERS = { 'Lrclib-Client': 'Ascolti/2.0 (https://github.com/Lumingft18/Spotify-Stats)' };
+const norm = (x: string) =>
+  x
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/\s*[([].*?[)\]]/g, '')
+    .replace(/\s+-\s+.*$/, '')
+    .replace(/[^a-z0-9 ]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+/**
+ * Plain lyrics from LRCLIB with ONE request per track (`/api/search` reads LRCLIB's own DB, no slow
+ * external lookups). The client identifies itself (higher rate limit) and the job runs sequentially,
+ * as LRCLIB's docs require. Returns '' when not found so the track is not retried forever.
+ */
 export async function fetchLyrics(t: TrackRef, signal: AbortSignal): Promise<MetaRow | null> {
-  const qs = new URLSearchParams({ artist_name: t.artist, track_name: t.track });
-  if (t.album) qs.set('album_name', t.album);
-  if (t.duration_ms) qs.set('duration', String(Math.round(t.duration_ms / 1000)));
-  let res = await netFetch(`https://lrclib.net/api/get?${qs}`, 'testi', { signal });
-  if (res.status === 404) {
-    // Fallback: search without album/duration constraints.
-    const s = new URLSearchParams({ artist_name: t.artist, track_name: t.track });
-    res = await netFetch(`https://lrclib.net/api/search?${s}`, 'testi', { signal });
-    if (!res.ok) return { uri: t.uri, lyrics: '' };
-    const arr = (await res.json()) as Array<{ plainLyrics?: string; instrumental?: boolean }>;
-    const hit = arr.find((a) => a.plainLyrics);
-    return { uri: t.uri, lyrics: hit?.plainLyrics?.slice(0, 2000) ?? (arr[0]?.instrumental ? '[strumentale]' : '') };
+  const qs = new URLSearchParams({ track_name: t.track.replace(/\s*[([].*?[)\]]/g, '').trim() || t.track, artist_name: t.artist });
+  const res = await netFetch(`https://lrclib.net/api/search?${qs}`, 'testi', { signal, headers: LRCLIB_HEADERS });
+  if (!res.ok) return res.status === 404 ? { uri: t.uri, lyrics: '' } : null;
+  const arr = (await res.json()) as Array<{ trackName?: string; artistName?: string; duration?: number; plainLyrics?: string | null; instrumental?: boolean }>;
+  const wantArtist = norm(t.artist);
+  const wantTrack = norm(t.track);
+  const dur = t.duration_ms ? t.duration_ms / 1000 : null;
+  const scored = arr
+    .filter((a) => a.plainLyrics || a.instrumental)
+    .map((a) => {
+      let score = 0;
+      if (norm(a.artistName ?? '').includes(wantArtist) || wantArtist.includes(norm(a.artistName ?? ''))) score += 2;
+      if (norm(a.trackName ?? '') === wantTrack) score += 2;
+      if (dur && a.duration && Math.abs(a.duration - dur) <= 3) score += 1;
+      return { a, score };
+    })
+    .sort((x, y) => y.score - x.score);
+  const best = scored[0];
+  if (!best || best.score < 2) return { uri: t.uri, lyrics: '' };
+  return { uri: t.uri, lyrics: best.a.instrumental ? '[strumentale]' : (best.a.plainLyrics ?? '').slice(0, 2000) };
+}
+
+/** Artist genres from MusicBrainz (free, no key). Cached per artist; ~1 request/second as MusicBrainz asks. */
+const mbArtistCache = new Map<string, string>();
+export async function fetchArtistTagsMB(artist: string, signal: AbortSignal): Promise<string> {
+  const hit = mbArtistCache.get(artist);
+  if (hit !== undefined) return hit;
+  const q = encodeURIComponent(`artist:"${artist.replace(/"/g, '')}"`);
+  const res = await netFetch(`https://musicbrainz.org/ws/2/artist/?query=${q}&limit=1&fmt=json`, 'generi MusicBrainz', { signal });
+  if (!res.ok) {
+    if (res.status === 404) mbArtistCache.set(artist, '');
+    if (res.status >= 500 || res.status === 429 || res.status === 503) throw new Error(`MusicBrainz HTTP ${res.status}`);
+    return '';
   }
-  if (!res.ok) return null;
-  const j = (await res.json()) as { plainLyrics?: string; instrumental?: boolean };
-  return { uri: t.uri, lyrics: j.instrumental ? '[strumentale]' : j.plainLyrics?.slice(0, 2000) ?? '' };
+  const j = (await res.json()) as { artists?: Array<{ name: string; score?: number; tags?: Array<{ name: string; count: number }> }> };
+  const a = j.artists?.[0];
+  const tags =
+    a && (a.score ?? 0) >= 90 && norm(a.name) === norm(artist)
+      ? (a.tags ?? [])
+          .sort((x, y) => y.count - x.count)
+          .slice(0, 8)
+          .map((x) => x.name.toLowerCase())
+          .join(', ')
+      : '';
+  mbArtistCache.set(artist, tags);
+  return tags;
 }
 
 const artistTagCache = new Map<string, string>();

@@ -18,9 +18,10 @@ export async function netFetch(url: string, purpose: string, init: RequestInit =
     const res = await fetch(url, init);
     if ((res.status === 429 || res.status >= 500) && attempt < retries) {
       const ra = Number(res.headers.get('retry-after'));
-      const wait = Number.isFinite(ra) && ra > 0 ? ra * 1000 : 800 * 2 ** attempt + Math.random() * 300;
+      // Honor Retry-After (+ up to 30% jitter, as LRCLIB/MusicBrainz ask), else exponential backoff.
+      const wait = Number.isFinite(ra) && ra > 0 ? ra * 1000 * (1 + Math.random() * 0.3) : 800 * 2 ** attempt + Math.random() * 300;
       attempt++;
-      await sleep(Math.min(wait, 15_000), init.signal ?? undefined);
+      await sleep(Math.min(wait, 65_000), init.signal ?? undefined);
       continue;
     }
     return res;

@@ -4,7 +4,7 @@ import { idb } from '../lib/idb';
 import { getApp, type ConnectionId } from '../lib/store';
 import { sleep } from './net';
 import { cacheCatalog } from '../lib/catalogCache';
-import { fetchAudioFeatures, fetchCover, fetchLyrics, fetchTags, type TrackRef } from './providers';
+import { fetchArtistTagsMB, fetchAudioFeatures, fetchCover, fetchLyrics, fetchTags, type TrackRef } from './providers';
 
 export type StepId = 'covers' | 'audiofeatures' | 'lyrics' | 'tags';
 
@@ -16,7 +16,7 @@ interface StepDef {
   concurrency: number;
   filter?: string; // extra SQL condition on tracks t
   /** Optional custom pending-items query (must return TrackRef columns, ordered by priority). */
-  itemsSql?: string;
+  itemsSql?: string | (() => string);
   run: (items: TrackRef[], signal: AbortSignal) => Promise<MetaRow[]>;
 }
 
@@ -26,7 +26,9 @@ const one =
     const out: MetaRow[] = [];
     for (const t of items) {
       const r = await fn(t, s);
-      if (r) out.push(r);
+      // null = transient failure (e.g. rate limited after retries): surface it so the item is retried later.
+      if (r === null) throw new Error('richiesta non riuscita');
+      out.push(r);
     }
     return out;
   };
@@ -47,7 +49,7 @@ export const STEPS: Record<StepId, StepDef> = {
       const out: MetaRow[] = [];
       for (const t of items) {
         const r = await fetchCover(t, s);
-        if (!r) continue;
+        if (!r) throw new Error('copertina non disponibile ora');
         const siblings = await query<{ uri: string }>(
           `SELECT uri FROM tracks WHERE artist = ? AND album = ? AND uri LIKE 'spotify:track:%'`,
           [t.artist, t.album],
@@ -73,17 +75,41 @@ export const STEPS: Record<StepId, StepDef> = {
     connection: 'lyrics',
     column: 'lyrics',
     batch: 1,
-    concurrency: 2,
+    // LRCLIB asks for sequential requests with a short pause (≈90/min for identified clients).
+    concurrency: 1,
     filter: `t.plays >= 2`,
-    run: one(fetchLyrics),
+    run: async (items, s) => {
+      const out = await one(fetchLyrics)(items, s);
+      await sleep(650, s).catch(() => undefined);
+      return out;
+    },
   },
   tags: {
     label: 'Tag e generi',
     connection: 'lastfm',
     column: 'tags',
     batch: 1,
-    concurrency: 3,
-    run: (items, s) => one((t, sig) => fetchTags(t, getApp().settings.lastfmKey, sig))(items, s),
+    concurrency: 1,
+    // With a Last.fm key: per-track tags. Without: per-artist genres from MusicBrainz (free, no key).
+    itemsSql: () =>
+      getApp().settings.lastfmKey
+        ? `SELECT t.uri, t.track, t.artist, t.album, t.duration_ms FROM tracks t LEFT JOIN meta m USING (uri)
+           WHERE m.tags IS NULL AND t.plays > 0 ORDER BY t.minutes DESC`
+        : `SELECT arg_max(t.uri, t.minutes) AS uri, arg_max(t.track, t.minutes) AS track, t.artist, '' AS album, NULL AS duration_ms
+           FROM tracks t LEFT JOIN meta m USING (uri) WHERE m.tags IS NULL AND t.plays > 0
+           GROUP BY t.artist ORDER BY sum(t.minutes) DESC`,
+    run: async (items, s) => {
+      const key = getApp().settings.lastfmKey;
+      if (key) return one((t, sig) => fetchTags(t, key, sig))(items, s);
+      const out: MetaRow[] = [];
+      for (const t of items) {
+        const tags = await fetchArtistTagsMB(t.artist, s);
+        const tracks = await query<{ uri: string }>(`SELECT uri FROM tracks WHERE artist = ?`, [t.artist]);
+        for (const x of tracks) out.push({ uri: x.uri, tags });
+        await sleep(1100, s).catch(() => undefined); // MusicBrainz: max ~1 req/s
+      }
+      return out;
+    },
   },
 };
 
@@ -113,7 +139,7 @@ export async function pendingCount(step: StepId): Promise<number> {
   const d = STEPS[step];
   const tried = new Set((await idb.get<string[]>(`tried:${step}`)) ?? []);
   const rows = await query<{ uri: string }>(
-    d.itemsSql ??
+    (typeof d.itemsSql === 'function' ? d.itemsSql() : d.itemsSql) ??
       `SELECT t.uri FROM tracks t LEFT JOIN meta m USING (uri) WHERE m.${d.column} IS NULL AND t.plays > 0 ${d.filter ? 'AND ' + d.filter : ''}`,
   );
   return rows.filter((r) => !tried.has(r.uri)).length;
@@ -125,7 +151,6 @@ export async function runStep(step: StepId, limit = Infinity): Promise<void> {
   const app = getApp();
   const d = STEPS[step];
   if (!app.settings.connections[d.connection]) return;
-  if (step === 'tags' && !app.settings.lastfmKey) return;
 
   const ctrl = new AbortController();
   controllers.set(step, ctrl);
@@ -133,7 +158,7 @@ export async function runStep(step: StepId, limit = Infinity): Promise<void> {
   const tried = new Set(triedArr);
   try {
     const rows = await query<TrackRef>(
-      d.itemsSql ??
+      (typeof d.itemsSql === 'function' ? d.itemsSql() : d.itemsSql) ??
         `SELECT t.uri, t.track, t.artist, t.album, t.duration_ms FROM tracks t LEFT JOIN meta m USING (uri)
        WHERE m.${d.column} IS NULL AND t.plays > 0 ${d.filter ? 'AND ' + d.filter : ''}
        ORDER BY t.minutes DESC`,
@@ -163,7 +188,7 @@ export async function runStep(step: StepId, limit = Infinity): Promise<void> {
       if (rowsToWrite.length) {
         await upsertMeta(rowsToWrite);
         // Public catalog data is also kept in a shared local cache (survives other exports / data wipes).
-        if (step === 'covers' || step === 'audiofeatures') void cacheCatalog(rowsToWrite).catch(() => undefined);
+        if (step !== 'tags' || !getApp().settings.lastfmKey) void cacheCatalog(rowsToWrite).catch(() => undefined);
         scheduleBump();
       }
       await idb.set(`tried:${step}`, Array.from(tried));
@@ -173,11 +198,13 @@ export async function runStep(step: StepId, limit = Infinity): Promise<void> {
       while (cursor < batches.length && !ctrl.signal.aborted) {
         const b = batches[cursor++];
         // Retry transient failures (rate limits often surface as CORS-less 429 → TypeError).
+        let ok = false;
         for (let attempt = 0; ; attempt++) {
           try {
             const res = await d.run(b, ctrl.signal);
             pending.push(...res);
             fails = 0;
+            ok = true;
             break;
           } catch (e) {
             if (ctrl.signal.aborted) return;
@@ -190,7 +217,8 @@ export async function runStep(step: StepId, limit = Infinity): Promise<void> {
             break;
           }
         }
-        for (const t of b) tried.add(t.uri);
+        // Only successful lookups are remembered; failed ones (rate limits, network) are retried next run.
+        if (ok) for (const t of b) tried.add(t.uri);
         done += b.length;
         job('running');
         if (pending.length >= 50 || Date.now() - lastFlush > 3000) await flush();
@@ -208,13 +236,25 @@ export async function runStep(step: StepId, limit = Infinity): Promise<void> {
   }
 }
 
+/** Earlier versions marked rate-limited lookups as "tried": forget those once so they are fetched again. */
+async function migrateTried() {
+  if ((await idb.get<number>('tried_version')) === 2) return;
+  await Promise.all(['tried:lyrics', 'tried:tags', 'tried:covers'].map((k) => idb.del(k)));
+  await idb.set('tried_version', 2);
+}
+
 /** Starts every enabled step in parallel (different hosts → no shared rate limit). */
 export function runAllEnabled() {
+  void migrateTried().then(runAllEnabledNow);
+}
+
+function runAllEnabledNow() {
   const s = getApp().settings;
   if (s.connections.covers) void runStep('covers');
   if (s.connections.audiofeatures) void runStep('audiofeatures');
-  if (s.connections.lyrics) void runStep('lyrics', 1500);
-  if (s.connections.lastfm && s.lastfmKey) void runStep('tags', 3000);
+  // Most-listened first; ~10–15 min each at the providers' polite rates. "Avvia" in Attività continues past these caps.
+  if (s.connections.lyrics) void runStep('lyrics', 800);
+  if (s.connections.lastfm) void runStep('tags', s.lastfmKey ? 3000 : 600);
 }
 
 export async function resetTried() {

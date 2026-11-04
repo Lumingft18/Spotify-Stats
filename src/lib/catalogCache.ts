@@ -1,11 +1,11 @@
-// Shared cache of PUBLIC catalog metadata (cover URL, audio features) keyed by Spotify track URI.
+// Shared cache of PUBLIC catalog metadata (cover URL, audio features, lyrics, genres) keyed by Spotify track URI.
 // Lives in its own IndexedDB database so it survives importing a different export
 // (e.g. a friend's ZIP) and "Cancella dati personali": nothing here identifies a listener on its own.
 import type { MetaRow } from '../data/schema';
 
 const DB = 'spotify-stats-catalog';
 const STORE = 'tracks';
-const CACHED_KEYS = ['cover', 'valence', 'energy', 'danceability', 'tempo', 'acousticness', 'mood_source', 'mood_conf'] as const;
+const CACHED_KEYS = ['cover', 'valence', 'energy', 'danceability', 'tempo', 'acousticness', 'mood_source', 'mood_conf', 'lyrics', 'tags'] as const;
 
 let dbP: Promise<IDBDatabase> | null = null;
 function open(): Promise<IDBDatabase> {

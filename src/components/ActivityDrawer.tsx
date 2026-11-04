@@ -4,6 +4,14 @@ import { runStep, stopStep, STEPS, type StepId } from '../enrichment/jobs';
 import { Button, cx, Meter } from './ui';
 import { fmtInt } from '../lib/format';
 
+const PER_ITEM_SECONDS: Partial<Record<StepId, number>> = { lyrics: 0.8, tags: 1.3, covers: 0.35 };
+function eta(id: StepId, remaining: number): string | null {
+  const s = PER_ITEM_SECONDS[id];
+  if (!s || remaining <= 0) return null;
+  const min = Math.ceil((remaining * s) / 60);
+  return min >= 60 ? `${Math.floor(min / 60)} h ${min % 60} min` : `${min} min`;
+}
+
 export function ActivityDrawer() {
   const open = useApp((s) => s.activityOpen);
   const jobs = useApp((s) => s.jobs);
@@ -33,7 +41,7 @@ export function ActivityDrawer() {
         {steps.map((id) => {
           const d = STEPS[id];
           const j = jobs[id];
-          const enabled = settings.connections[d.connection] && (id !== 'tags' || !!settings.lastfmKey);
+          const enabled = settings.connections[d.connection];
           const running = j?.status === 'running';
           return (
             <div key={id} className={cx('rounded-2xl border border-border bg-surface-2/60 p-4', !enabled && 'opacity-60')}>
@@ -61,7 +69,15 @@ export function ActivityDrawer() {
                     <span className="num">
                       {fmtInt(j.done)} / {fmtInt(j.total)}
                     </span>
-                    <span>{j.status === 'running' ? 'in corso' : j.status === 'paused' ? 'in pausa' : j.status === 'done' ? 'completato' : ''}</span>
+                    <span>
+                      {j.status === 'running'
+                        ? `in corso${eta(id, j.total - j.done) ? ` · ~${eta(id, j.total - j.done)}` : ''}`
+                        : j.status === 'paused'
+                          ? 'in pausa'
+                          : j.status === 'done'
+                            ? 'completato'
+                            : ''}
+                    </span>
                   </div>
                 </>
               )}
