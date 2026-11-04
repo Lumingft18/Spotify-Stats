@@ -22,3 +22,12 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Personal data — never commit Spotify exports
+*.zip
+my_spotify_data*/
+Spotify Extended Streaming History/
+Streaming_History*.json
+StreamingHistory*.json
+.env
+.env.*

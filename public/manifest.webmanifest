@@ -1,0 +1,13 @@
+{
+  "name": "Ascolti — le tue statistiche Spotify",
+  "short_name": "Ascolti",
+  "description": "Analisi locale e privata del tuo storico di ascolto Spotify.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#121418",
+  "theme_color": "#121418",
+  "lang": "it",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}
