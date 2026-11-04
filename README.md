@@ -22,6 +22,10 @@ Nessun backend. I dati restano in IndexedDB. Servizi esterni solo se attivati: `
 
 React 19 · TypeScript · Vite 7 · Tailwind 4 · DuckDB-WASM · Apache Arrow · transformers.js · umap-js · Observable Plot · cmdk · zustand.
 
+## Avvio rapido
+
+Doppio click su **`Avvia Ascolti.command`** (macOS): installa le dipendenze la prima volta, avvia il server locale e apre il browser su http://localhost:5173. Chiudi la finestra del Terminale per fermare tutto.
+
 ## Sviluppo
 
 ```bash
