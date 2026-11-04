@@ -3,7 +3,7 @@ import { ShieldCheck, Trash2, Upload, Globe, KeyRound, Clock, Save, CheckCircle2
 import { checkOpenRouterKey } from '../../llm/client';
 import { catalogSize, clearCatalog } from '../../lib/catalogCache';
 import { useAsync } from '../../data/useSql';
-import { useApp, type ConnectionId } from '../../lib/store';
+import { ENV_KEYS, useApp, type ConnectionId } from '../../lib/store';
 import { query, loadPlays, wipeAll } from '../../data/db';
 import { afterDataLoaded, importFiles } from '../../data/lifecycle';
 import { emptyColumns, makeLocalizer, PLAY_COLUMNS, type PlayColumns } from '../../data/normalize';
@@ -149,7 +149,11 @@ function KeysForm() {
           placeholder="sk-or-…"
           className="h-10 rounded-xl border border-border bg-surface-2 px-3 font-mono text-sm"
         />
-        <span className="text-xs text-text-faint">Crea una chiave su openrouter.ai/keys e imposta un limite di spesa.</span>
+        <span className="text-xs text-text-faint">
+          {ENV_KEYS.openrouterKey
+            ? 'Caricata automaticamente da .env.local (vale solo in locale, non finisce mai nella build).'
+            : 'Crea una chiave su openrouter.ai/keys e imposta un limite di spesa. In locale puoi metterla in .env.local.'}
+        </span>
       </label>
       <div className="grid gap-3 sm:grid-cols-2">
         <label className="flex flex-col gap-1 text-sm">

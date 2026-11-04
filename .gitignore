@@ -31,3 +31,4 @@ Streaming_History*.json
 StreamingHistory*.json
 .env
 .env.*
+!.env.example

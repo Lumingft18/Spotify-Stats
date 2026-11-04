@@ -14,6 +14,9 @@ export interface Settings {
 
 const SETTINGS_KEY = 'ss2.settings';
 
+/** Keys from .env.local (local dev server only). They win over values saved in the browser. */
+export const ENV_KEYS = typeof __LOCAL_KEYS__ === 'undefined' ? {} : __LOCAL_KEYS__;
+
 const defaultSettings: Settings = {
   timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/Rome',
   openrouterKey: '',
@@ -23,21 +26,33 @@ const defaultSettings: Settings = {
   connections: {
     covers: true,
     audiofeatures: true,
-    lyrics: false,
-    lastfm: false,
+    lyrics: true,
+    lastfm: true,
     llm: false,
     embedModel: true,
   },
 };
 
+function withEnv(s: Settings): Settings {
+  const e = ENV_KEYS;
+  return {
+    ...s,
+    openrouterKey: e.openrouterKey || s.openrouterKey,
+    lastfmKey: e.lastfmKey || s.lastfmKey,
+    llmModelBulk: e.llmModelBulk || s.llmModelBulk,
+    llmModelAgent: e.llmModelAgent || s.llmModelAgent,
+    connections: { ...s.connections, llm: e.openrouterKey ? true : s.connections.llm },
+  };
+}
+
 function loadSettings(): Settings {
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
-    if (!raw) return defaultSettings;
+    if (!raw) return withEnv(defaultSettings);
     const s = JSON.parse(raw) as Partial<Settings>;
-    return { ...defaultSettings, ...s, connections: { ...defaultSettings.connections, ...(s.connections ?? {}) } };
+    return withEnv({ ...defaultSettings, ...s, connections: { ...defaultSettings.connections, ...(s.connections ?? {}) } });
   } catch {
-    return defaultSettings;
+    return withEnv(defaultSettings);
   }
 }
 

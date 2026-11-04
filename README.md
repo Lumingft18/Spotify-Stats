@@ -26,6 +26,8 @@ React 19 · TypeScript · Vite 7 · Tailwind 4 · DuckDB-WASM · Apache Arrow ·
 
 Doppio click su **`Avvia Ascolti.command`** (macOS): installa le dipendenze la prima volta, avvia il server locale e apre il browser su http://localhost:5173. Chiudi la finestra del Terminale per fermare tutto.
 
+Chiavi API in locale: copia `.env.example` in `.env.local` e compilala. Vengono caricate in automatico dal server locale (mai incluse nella build né nel repository).
+
 ## Sviluppo
 
 ```bash
