@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import type { AccountProfile } from '../data/account';
 
 export type ConnectionId = 'covers' | 'audiofeatures' | 'lyrics' | 'lastfm' | 'llm' | 'embedModel';
 
@@ -60,6 +61,10 @@ interface AppState {
   importStep: string;
   range: { from: string | null; to: string | null };
   bounds: { min: string; max: string } | null;
+  /** Personal "account data" package (name, library, playlists…) when uploaded, or a manually entered name. */
+  profile: AccountProfile | null;
+  /** What kind of listening history is loaded. */
+  dataset: { historyKind: 'extended' | 'legacy'; rows: number } | null;
   /** Bumped whenever derived tables or the filter change → all queries re-run. */
   epoch: number;
   settings: Settings;
@@ -79,6 +84,8 @@ export const useApp = create<AppState>((set, get) => ({
   importStep: '',
   range: { from: null, to: null },
   bounds: null,
+  profile: null,
+  dataset: null,
   epoch: 0,
   settings: loadSettings(),
   jobs: {},

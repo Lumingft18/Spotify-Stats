@@ -11,6 +11,7 @@ export function Onboarding() {
   const set = useApp((s) => s.set);
   const [error, setError] = useState<string | null>(null);
   const [drag, setDrag] = useState(false);
+  const [name, setName] = useState('');
   const input = useRef<HTMLInputElement>(null);
 
   const handle = async (list: FileList | File[] | null) => {
@@ -22,8 +23,9 @@ export function Onboarding() {
     setError(null);
     set({ status: 'importing', importStep: 'Preparazione…' });
     try {
-      await importFiles(files, (s) => set({ importStep: s }));
-      navigate(routes.story());
+      const out = await importFiles(files, (s) => set({ importStep: s }), { mode: 'replace', name });
+      // No full history yet → land on the overview, where a banner asks for the missing package.
+      navigate(out.historyKind === 'extended' ? routes.story() : routes.overview());
     } catch (e) {
       console.error(e);
       setError(e instanceof Error ? e.message : String(e));
@@ -65,12 +67,13 @@ export function Onboarding() {
                       <a className="text-[var(--accent)] underline-offset-2 hover:underline" href="https://www.spotify.com/account/privacy/" target="_blank" rel="noreferrer">
                         spotify.com → Privacy
                       </a>{' '}
-                      seleziona solo “Cronologia di streaming estesa”.
+                      richiedi <b className="text-text">“Cronologia di streaming estesa”</b> (tutto lo storico) e, se vuoi,{' '}
+                      <b className="text-text">“Dati dell’account”</b> (nome, playlist, libreria, ricerche, Wrapped).
                     </>
                   ),
                 },
-                { icon: FileArchive, t: 'Aspetta l’email', d: 'Spotify invia lo ZIP in qualche giorno (fino a 30).' },
-                { icon: Upload, t: 'Trascinalo qui', d: 'Non viene caricato da nessuna parte: resta sul tuo dispositivo.' },
+                { icon: FileArchive, t: 'Aspetta le email', d: 'Arrivano due ZIP separati: i dati dell’account in ~5 giorni, la cronologia estesa fino a 30. Puoi caricarne uno subito e l’altro dopo.' },
+                { icon: Upload, t: 'Trascinali qui', d: 'Anche entrambi insieme. Non vengono caricati da nessuna parte: restano sul tuo dispositivo.' },
               ].map((s, i) => (
                 <li key={i} className="flex gap-3">
                   <span className="grid size-8 shrink-0 place-items-center rounded-full border border-border bg-surface-1 text-text-muted">
@@ -125,8 +128,8 @@ export function Onboarding() {
                   <div className="grid size-16 place-items-center rounded-full bg-[var(--accent)] text-accent-ink">
                     <Upload size={26} />
                   </div>
-                  <div className="text-xl font-medium">Trascina qui lo ZIP</div>
-                  <div className="text-sm text-text-muted">oppure clicca per sceglierlo · accetta anche i file .json</div>
+                  <div className="text-xl font-medium">Trascina qui uno o entrambi gli ZIP</div>
+                  <div className="text-sm text-text-muted">Cronologia estesa e/o Dati dell’account · accetta anche i file .json</div>
                   <Button variant="secondary" className="mt-2" tabIndex={-1}>
                     Scegli file
                   </Button>
@@ -141,6 +144,16 @@ export function Onboarding() {
                 onChange={(e) => void handle(e.target.files)}
               />
             </div>
+            <label className="mt-4 flex items-center gap-3 text-sm text-text-muted">
+              Come ti chiami?
+              <input
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="facoltativo — lo prendo dai dati dell’account se ci sono"
+                aria-label="Il tuo nome"
+                className="h-9 min-w-0 flex-1 rounded-full border border-border bg-surface-1 px-4 text-sm text-text placeholder:text-text-faint"
+              />
+            </label>
             {error && (
               <div className="mt-4">
                 <ErrorNote>{error}</ErrorNote>

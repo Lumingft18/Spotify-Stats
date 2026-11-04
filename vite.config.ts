@@ -6,7 +6,7 @@ import tailwindcss from '@tailwindcss/vite'
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   worker: { format: 'es' },
-  optimizeDeps: { exclude: ['@duckdb/duckdb-wasm', '@huggingface/transformers'] },
+  optimizeDeps: { exclude: ['@duckdb/duckdb-wasm'] },
   build: {
     target: 'es2022',
     chunkSizeWarningLimit: 1500,

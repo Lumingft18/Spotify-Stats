@@ -1,5 +1,8 @@
 import { useRef, useState } from 'react';
-import { ShieldCheck, Trash2, Upload, Globe, KeyRound, Clock } from 'lucide-react';
+import { ShieldCheck, Trash2, Upload, Globe, KeyRound, Clock, Save, CheckCircle2 } from 'lucide-react';
+import { checkOpenRouterKey } from '../../llm/client';
+import { catalogSize, clearCatalog } from '../../lib/catalogCache';
+import { useAsync } from '../../data/useSql';
 import { useApp, type ConnectionId } from '../../lib/store';
 import { query, loadPlays, wipeAll } from '../../data/db';
 import { afterDataLoaded, importFiles } from '../../data/lifecycle';
@@ -13,8 +16,7 @@ const CONNECTIONS: Array<{ id: ConnectionId; title: string; host: string; sends:
   { id: 'audiofeatures', title: 'Audio features (valence, energia, tempo)', host: 'api.reccobeats.com', sends: 'ID Spotify dei brani, a blocchi di 40' },
   { id: 'lyrics', title: 'Testi', host: 'lrclib.net', sends: 'titolo, artista, album e durata dei brani più ascoltati' },
   { id: 'lastfm', title: 'Tag e generi', host: 'ws.audioscrobbler.com (Last.fm)', sends: 'titolo e artista; richiede la tua chiave API' },
-  { id: 'embedModel', title: 'Modello di embedding', host: 'huggingface.co', sends: 'nulla: scarica solo il modello (una volta)' },
-  { id: 'llm', title: 'Funzioni AI (mood, nomi, assistente)', host: 'openrouter.ai', sends: 'titoli, artisti, tag, estratti di testo e risultati delle query; mai lo storico completo' },
+  { id: 'llm', title: 'Funzioni AI (mappa del gusto, mood, nomi, assistente)', host: 'openrouter.ai', sends: 'titoli, artisti, album, tag, estratti di testo e risultati delle query; mai lo storico completo' },
 ];
 
 function Toggle({ on, onChange, label }: { on: boolean; onChange: (v: boolean) => void; label: string }) {
@@ -49,6 +51,141 @@ async function reapplyTimezone(tz: string) {
   cols.ts_local = cols.ts_start.map((s) => loc(Date.parse(s.replace(' ', 'T') + 'Z')));
   await loadPlays(cols);
   await afterDataLoaded();
+}
+
+function CatalogCard() {
+  const [v, setV] = useState(0);
+  const n = useAsync(catalogSize, [v]);
+  return (
+    <Card className="flex flex-wrap items-center justify-between gap-3">
+      <div className="text-sm text-text-muted">
+        <span className="num text-text">{(n.value ?? 0).toLocaleString('it-IT')}</span> brani in cache. Sono dati pubblici del catalogo (URL copertina, valence, energia):
+        restano anche se carichi l’export di un’altra persona o cancelli i dati personali, così non vanno riscaricati.
+      </div>
+      <Button
+        size="sm"
+        variant="ghost"
+        onClick={async () => {
+          await clearCatalog();
+          setV((x) => x + 1);
+        }}
+      >
+        Svuota cache
+      </Button>
+    </Card>
+  );
+}
+
+function KeysForm() {
+  const settings = useApp((s) => s.settings);
+  const update = useApp((s) => s.updateSettings);
+  const [draft, setDraft] = useState({
+    openrouterKey: settings.openrouterKey,
+    lastfmKey: settings.lastfmKey,
+    llmModelBulk: settings.llmModelBulk,
+    llmModelAgent: settings.llmModelAgent,
+  });
+  const [state, setState] = useState<{ kind: 'idle' | 'saving' | 'ok' | 'error'; msg?: string }>({ kind: 'idle' });
+  const dirty =
+    draft.openrouterKey !== settings.openrouterKey ||
+    draft.lastfmKey !== settings.lastfmKey ||
+    draft.llmModelBulk !== settings.llmModelBulk ||
+    draft.llmModelAgent !== settings.llmModelAgent;
+  const set = (k: keyof typeof draft) => (e: React.ChangeEvent<HTMLInputElement>) => {
+    setDraft((d) => ({ ...d, [k]: e.target.value.trim() }));
+    setState({ kind: 'idle' });
+  };
+
+  const save = async () => {
+    setState({ kind: 'saving' });
+    let msg = 'Salvato.';
+    if (draft.openrouterKey) {
+      try {
+        const r = await checkOpenRouterKey(draft.openrouterKey);
+        if (!r.ok) {
+          setState({ kind: 'error', msg: 'OpenRouter non riconosce questa chiave. Controlla di averla copiata tutta.' });
+          return;
+        }
+        msg = `Chiave OpenRouter valida${r.label ? ` (${r.label})` : ''}${r.limit != null ? ` · limite $${r.limit}` : ' · nessun limite di spesa impostato'}. Funzioni AI attivate.`;
+      } catch {
+        msg = 'Salvato (non è stato possibile verificare la chiave: sei offline?).';
+      }
+    }
+    update({
+      ...draft,
+      connections: {
+        ...settings.connections,
+        llm: draft.openrouterKey ? true : settings.connections.llm,
+        lastfm: draft.lastfmKey ? true : settings.connections.lastfm,
+      },
+    });
+    setState({ kind: 'ok', msg });
+    setTimeout(runAllEnabled, 50);
+  };
+
+  return (
+    <Card className="flex flex-col gap-4">
+      <label className="flex flex-col gap-1 text-sm">
+        <span className="flex items-center gap-2 font-medium">
+          <KeyRound size={14} /> OpenRouter
+          {settings.openrouterKey && settings.connections.llm && (
+            <span className="ml-1 inline-flex items-center gap-1 text-xs text-good">
+              <CheckCircle2 size={12} /> attiva
+            </span>
+          )}
+        </span>
+        <input
+          type="password"
+          autoComplete="off"
+          value={draft.openrouterKey}
+          onChange={set('openrouterKey')}
+          onKeyDown={(e) => e.key === 'Enter' && dirty && void save()}
+          placeholder="sk-or-…"
+          className="h-10 rounded-xl border border-border bg-surface-2 px-3 font-mono text-sm"
+        />
+        <span className="text-xs text-text-faint">Crea una chiave su openrouter.ai/keys e imposta un limite di spesa.</span>
+      </label>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <label className="flex flex-col gap-1 text-sm">
+          <span className="text-text-muted">Modello per elaborazioni in blocco</span>
+          <input value={draft.llmModelBulk} onChange={set('llmModelBulk')} className="h-10 rounded-xl border border-border bg-surface-2 px-3 font-mono text-xs" />
+        </label>
+        <label className="flex flex-col gap-1 text-sm">
+          <span className="text-text-muted">Modello per l’assistente</span>
+          <input value={draft.llmModelAgent} onChange={set('llmModelAgent')} className="h-10 rounded-xl border border-border bg-surface-2 px-3 font-mono text-xs" />
+        </label>
+      </div>
+      <label className="flex flex-col gap-1 text-sm">
+        <span className="flex items-center gap-2 font-medium">
+          <KeyRound size={14} /> Last.fm <span className="text-xs font-normal text-text-faint">(facoltativa)</span>
+        </span>
+        <input
+          type="password"
+          autoComplete="off"
+          value={draft.lastfmKey}
+          onChange={set('lastfmKey')}
+          placeholder="chiave API Last.fm"
+          className="h-10 rounded-xl border border-border bg-surface-2 px-3 font-mono text-sm"
+        />
+        <span className="text-xs text-text-faint">Gratuita su last.fm/api/account/create. Serve per tag e generi.</span>
+      </label>
+      <div className="flex flex-wrap items-center gap-3">
+        <Button variant="primary" onClick={() => void save()} disabled={!dirty || state.kind === 'saving'}>
+          {state.kind === 'saving' ? <Spinner size={14} /> : <Save size={14} />} Salva
+        </Button>
+        {dirty && state.kind === 'idle' && <span className="text-xs text-text-muted">Modifiche non salvate</span>}
+        {state.kind === 'ok' && (
+          <span role="status" className="flex items-center gap-1.5 text-sm text-good">
+            <CheckCircle2 size={15} /> {state.msg}
+          </span>
+        )}
+      </div>
+      {state.kind === 'error' && <ErrorNote>{state.msg}</ErrorNote>}
+      <p className="text-xs text-text-faint">
+        Le chiavi sono salvate in chiaro nel localStorage di questo browser. Non usare questa app su computer condivisi con chiavi senza limiti di spesa.
+      </p>
+    </Card>
+  );
 }
 
 export default function SettingsPage() {
@@ -94,51 +231,7 @@ export default function SettingsPage() {
       </Section>
 
       <Section kicker="Chiavi" title="Le tue chiavi API (restano in questo browser)">
-        <Card className="flex flex-col gap-4">
-          <label className="flex flex-col gap-1 text-sm">
-            <span className="flex items-center gap-2 font-medium">
-              <KeyRound size={14} /> OpenRouter
-            </span>
-            <input
-              type="password"
-              autoComplete="off"
-              value={settings.openrouterKey}
-              onChange={(e) => update({ openrouterKey: e.target.value.trim() })}
-              placeholder="sk-or-…"
-              className="h-10 rounded-xl border border-border bg-surface-2 px-3 font-mono text-sm"
-            />
-            <span className="text-xs text-text-faint">
-              Crea una chiave su openrouter.ai/keys. Ti consigliamo un limite di spesa sulla chiave.
-            </span>
-          </label>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <label className="flex flex-col gap-1 text-sm">
-              <span className="text-text-muted">Modello per elaborazioni in blocco</span>
-              <input value={settings.llmModelBulk} onChange={(e) => update({ llmModelBulk: e.target.value.trim() })} className="h-10 rounded-xl border border-border bg-surface-2 px-3 font-mono text-xs" />
-            </label>
-            <label className="flex flex-col gap-1 text-sm">
-              <span className="text-text-muted">Modello per l’assistente</span>
-              <input value={settings.llmModelAgent} onChange={(e) => update({ llmModelAgent: e.target.value.trim() })} className="h-10 rounded-xl border border-border bg-surface-2 px-3 font-mono text-xs" />
-            </label>
-          </div>
-          <label className="flex flex-col gap-1 text-sm">
-            <span className="flex items-center gap-2 font-medium">
-              <KeyRound size={14} /> Last.fm
-            </span>
-            <input
-              type="password"
-              autoComplete="off"
-              value={settings.lastfmKey}
-              onChange={(e) => update({ lastfmKey: e.target.value.trim() })}
-              placeholder="chiave API Last.fm"
-              className="h-10 rounded-xl border border-border bg-surface-2 px-3 font-mono text-sm"
-            />
-            <span className="text-xs text-text-faint">Gratuita su last.fm/api/account/create. Serve per tag e generi.</span>
-          </label>
-          <p className="text-xs text-text-faint">
-            Attenzione: le chiavi sono salvate in chiaro nel localStorage di questo browser. Non usare questa app su computer condivisi con chiavi senza limiti di spesa.
-          </p>
-        </Card>
+        <KeysForm />
       </Section>
 
       <Section kicker="Fuso orario" title="Per ore e giorni locali">
@@ -187,7 +280,7 @@ export default function SettingsPage() {
                 setErr(null);
                 try {
                   stopAll();
-                  await importFiles(Array.from(e.target.files), () => undefined);
+                  await importFiles(Array.from(e.target.files), () => undefined, { mode: 'replace' });
                 } catch (x) {
                   setErr(x instanceof Error ? x.message : String(x));
                 } finally {
@@ -236,6 +329,10 @@ export default function SettingsPage() {
           )}
           {err && <ErrorNote>{err}</ErrorNote>}
         </Card>
+      </Section>
+
+      <Section kicker="Cache" title="Copertine e audio features salvate in locale">
+        <CatalogCard />
       </Section>
 
       <Section kicker="Trasparenza" title="Connessioni effettuate in questa sessione">

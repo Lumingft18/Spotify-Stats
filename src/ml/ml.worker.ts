@@ -1,26 +1,16 @@
 /// <reference lib="webworker" />
-// ML worker: text embeddings (transformers.js, WebGPU→WASM fallback), UMAP layout, k-means clustering.
-import { pipeline, env, type FeatureExtractionPipeline } from '@huggingface/transformers';
+// ML worker: UMAP layout and k-means clustering (CPU-heavy, kept off the main thread).
 import { UMAP } from 'umap-js';
 
-env.allowLocalModels = false;
-
 export type MlRequest =
-  | { type: 'load'; model: string; dtype: string; dim: number }
-  | { type: 'embed'; id: number; texts: string[] }
   | { type: 'umap'; id: number; vecs: Float32Array; n: number; dim: number; seed: number }
   | { type: 'kmeans'; id: number; vecs: Float32Array; n: number; dim: number; kMin: number; kMax: number; seed: number };
 
 export type MlResponse =
   | { type: 'progress'; stage: string; loaded?: number; total?: number }
-  | { type: 'loaded'; device: string }
-  | { type: 'embedded'; id: number; vecs: Float32Array; dim: number }
   | { type: 'umap'; id: number; xy: Float32Array }
   | { type: 'kmeans'; id: number; labels: Int32Array<ArrayBufferLike>; k: number; silhouette: number }
   | { type: 'error'; id?: number; message: string };
-
-let extractor: FeatureExtractionPipeline | null = null;
-let targetDim = 256;
 
 const post = (m: MlResponse, transfer: Transferable[] = []) => (self as unknown as Worker).postMessage(m, transfer);
 
@@ -32,42 +22,6 @@ function mulberry32(a: number) {
     t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
-}
-
-async function load(model: string, dtype: string, dim: number) {
-  targetDim = dim;
-  const progress_callback = (p: { status: string; file?: string; loaded?: number; total?: number }) => {
-    if (p.status === 'progress') post({ type: 'progress', stage: `Download modello (${p.file ?? ''})`, loaded: p.loaded, total: p.total });
-  };
-  const hasGpu = 'gpu' in navigator && !!(await (navigator as Navigator & { gpu?: { requestAdapter(): Promise<unknown> } }).gpu?.requestAdapter().catch(() => null));
-  const device = hasGpu ? 'webgpu' : 'wasm';
-  extractor = (await pipeline('feature-extraction', model, {
-    device,
-    dtype: dtype as 'q4',
-    progress_callback,
-  } as never)) as FeatureExtractionPipeline;
-  post({ type: 'loaded', device });
-}
-
-async function embed(id: number, texts: string[]) {
-  if (!extractor) throw new Error('Modello non caricato');
-  const out = await extractor(texts, { pooling: 'mean', normalize: true });
-  const full = out.dims[1];
-  const dim = Math.min(targetDim, full);
-  const data = out.data as Float32Array;
-  const vecs = new Float32Array(texts.length * dim);
-  for (let i = 0; i < texts.length; i++) {
-    // Matryoshka truncation + L2 re-normalization.
-    let norm = 0;
-    for (let j = 0; j < dim; j++) {
-      const v = data[i * full + j];
-      vecs[i * dim + j] = v;
-      norm += v * v;
-    }
-    norm = Math.sqrt(norm) || 1;
-    for (let j = 0; j < dim; j++) vecs[i * dim + j] /= norm;
-  }
-  post({ type: 'embedded', id, vecs, dim }, [vecs.buffer]);
 }
 
 function rows(vecs: Float32Array, n: number, dim: number): number[][] {
@@ -197,9 +151,7 @@ function kmeans(id: number, vecs: Float32Array, n: number, dim: number, kMin: nu
 self.onmessage = async (e: MessageEvent<MlRequest>) => {
   const m = e.data;
   try {
-    if (m.type === 'load') await load(m.model, m.dtype, m.dim);
-    else if (m.type === 'embed') await embed(m.id, m.texts);
-    else if (m.type === 'umap') await umap(m.id, m.vecs, m.n, m.dim, m.seed);
+    if (m.type === 'umap') await umap(m.id, m.vecs, m.n, m.dim, m.seed);
     else if (m.type === 'kmeans') kmeans(m.id, m.vecs, m.n, m.dim, m.kMin, m.kMax, m.seed);
   } catch (err) {
     post({ type: 'error', id: 'id' in m ? m.id : undefined, message: err instanceof Error ? err.message : String(err) });

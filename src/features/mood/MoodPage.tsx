@@ -6,16 +6,17 @@ import { fmtHours, fmtInt, fmtPct, fmtMonth } from '../../lib/format';
 import { getMood, MOODS, MOOD_HEX, MOOD_SQL, moodLabel } from '../../lib/mood';
 import { navigate, routes } from '../../lib/router';
 import { idb } from '../../lib/idb';
-import { buildIndex, computeLayout, EMBED_MODELS, loadIndex, semanticSearch, type EmbedModelKey } from '../../ml/embeddings';
+import { buildIndex, computeLayout, DEFAULT_EMBED_MODEL, EMBED_MODELS, loadIndex, semanticSearch } from '../../ml/embeddings';
 import { runStep } from '../../enrichment/jobs';
 import { runMoodV2, moodCandidates, type MoodRunReport } from '../../llm/mood';
 import { nameClustersWithLLM } from '../../llm/narrate';
-import { llmAvailable, estimateTokens } from '../../llm/client';
+import { useLlmAvailable, estimateTokens } from '../../llm/client';
 import { Badge, Button, Card, ErrorNote, Meter, PageHeader, Section, Segmented, Skeleton, Spinner } from '../../components/ui';
 import { Cover } from '../../components/Cover';
 import { Galaxy, type GalaxyPoint } from '../../components/charts/Galaxy';
 import { MoodPlane } from '../../components/charts/common';
 import { PlotChart, Plot } from '../../components/charts/PlotChart';
+import { MoodTimeline } from './MoodTimeline';
 
 const CLUSTER_COLORS = ['#e8b94a', '#5cc6c0', '#e0604f', '#7f7bd6', '#8fd16a', '#e98ac0', '#4fa3e0', '#d9a066', '#b5e3d8', '#c7a3ff', '#f2d16b', '#6fd6a8', '#ff9f7a', '#9ab0ff'];
 
@@ -32,6 +33,7 @@ interface MapRow {
 }
 
 function MoodStatus() {
+  const ai = useLlmAvailable();
   const cov = useSqlOne<{ with_mood: number; total: number; reccobeats: number; llm: number }>(`
     SELECT sum(minutes) FILTER (WHERE p.valence IS NOT NULL) AS with_mood, sum(minutes) AS total,
            count(DISTINCT p.uri) FILTER (WHERE m.mood_source = 'reccobeats') AS reccobeats,
@@ -115,11 +117,11 @@ function MoodStatus() {
               <X size={14} /> Ferma
             </Button>
           ) : (
-            <Button size="sm" variant="primary" disabled={!llmAvailable() || !nCand} onClick={() => void runLlm()}>
+            <Button size="sm" variant="primary" disabled={!ai || !nCand} onClick={() => void runLlm()}>
               <Wand2 size={14} /> Stima mood
             </Button>
           )}
-          {!llmAvailable() && (
+          {!ai && (
             <a href={routes.settings()} className="text-xs text-[var(--accent)]">
               Serve una chiave OpenRouter
             </a>
@@ -139,6 +141,7 @@ function MoodStatus() {
 }
 
 function GalaxySection() {
+  const ai = useLlmAvailable();
   const epoch = useApp((s) => s.epoch);
   const index = useAsync(loadIndex, [epoch]);
   const rows = useSql<MapRow>(`
@@ -147,7 +150,6 @@ function GalaxySection() {
   const clusters = useSql<{ id: number; label: string }>(`SELECT id, label FROM clusters ORDER BY id`);
   const periodUris = useSql<{ uri: string }>(`SELECT DISTINCT uri FROM p`);
   const [colorBy, setColorBy] = useState<'cluster' | 'mood'>('cluster');
-  const [model, setModel] = useState<EmbedModelKey>('gemma');
   const [n, setN] = useState(2500);
   const [building, setBuilding] = useState<{ stage: string; done: number; total: number } | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -206,7 +208,7 @@ function GalaxySection() {
     ctrl.current = new AbortController();
     try {
       setBuilding({ stage: 'Avvio', done: 0, total: 1 });
-      await buildIndex(model, n, (stage, done, total) => setBuilding({ stage, done, total }), ctrl.current.signal);
+      await buildIndex(DEFAULT_EMBED_MODEL, n, (stage, done, total) => setBuilding({ stage, done, total }), ctrl.current.signal);
     } catch (e) {
       if (!ctrl.current.signal.aborted) setErr(e instanceof Error ? e.message : String(e));
     } finally {
@@ -264,25 +266,23 @@ function GalaxySection() {
           <Orbit size={20} className="text-[var(--accent)]" /> Crea la mappa del tuo gusto
         </div>
         <p className="max-w-2xl text-sm text-text-muted">
-          Un modello di embedding gira nel tuo browser (WebGPU se disponibile) e trasforma ogni brano in un vettore: titolo, artista, generi e testo.
-          Poi una proiezione UMAP li dispone su una mappa: brani vicini = brani simili. Il modello si scarica una volta sola da Hugging Face.
-          Più testi e tag hai arricchito, migliore sarà la mappa.
+          Ogni brano (titolo, artista, album, generi e testo) diventa un vettore con {EMBED_MODELS[DEFAULT_EMBED_MODEL].id} tramite OpenRouter, con la
+          tua chiave. Poi una proiezione UMAP, calcolata nel browser, li dispone su una mappa: brani vicini = brani simili. Costo indicativo:
+          circa $0,05 ogni 1.000 brani. Più testi e tag hai arricchito, migliore sarà la mappa.
         </p>
         <div className="flex flex-wrap items-center gap-3">
-          <select value={model} onChange={(e) => setModel(e.target.value as EmbedModelKey)} className="h-9 rounded-full border border-border bg-surface-2 px-3 text-sm">
-            {(Object.keys(EMBED_MODELS) as EmbedModelKey[]).map((k) => (
-              <option key={k} value={k}>
-                {EMBED_MODELS[k].label}
-              </option>
-            ))}
-          </select>
           <label className="flex items-center gap-2 text-sm text-text-muted">
             Brani
             <input type="number" min={100} max={20000} step={100} value={n} onChange={(e) => setN(Number(e.target.value))} className="h-9 w-24 rounded-full border border-border bg-surface-2 px-3 text-sm text-text" />
           </label>
-          <Button variant="primary" onClick={() => void build()}>
+          <Button variant="primary" onClick={() => void build()} disabled={!ai}>
             <Orbit size={16} /> Crea mappa
           </Button>
+          {!ai && (
+            <a href={routes.settings()} className="text-xs text-[var(--accent)]">
+              Serve la chiave OpenRouter
+            </a>
+          )}
         </div>
         {err && <ErrorNote>{err}</ErrorNote>}
       </Card>
@@ -296,7 +296,7 @@ function GalaxySection() {
         <div className="min-w-0 flex-1">
           <div className="text-sm">{building.stage}</div>
           {building.total > 1 && <Meter value={building.done} max={building.total} />}
-          <div className="mt-1 text-xs text-text-faint">La prima volta scarica il modello; le volte successive è immediato.</div>
+          <div className="mt-1 text-xs text-text-faint">Gli embedding arrivano da OpenRouter a blocchi da 96 brani.</div>
         </div>
         <Button size="sm" variant="ghost" onClick={() => ctrl.current?.abort()}>
           Annulla
@@ -438,7 +438,7 @@ function GalaxySection() {
       <div className="flex flex-wrap gap-2">
         <Button
           size="sm"
-          disabled={!llmAvailable() || naming}
+          disabled={!ai || naming}
           onClick={async () => {
             setNaming(true);
             setErr(null);
@@ -457,7 +457,7 @@ function GalaxySection() {
           <RefreshCw size={14} /> Ricalcola mappa
         </Button>
         <Button size="sm" variant="ghost" onClick={() => void build()} disabled={!!building}>
-          Ricrea indice ({index.value ? EMBED_MODELS[index.value.model].label.split(' (')[0] : ''}, {fmtInt(index.value?.uris.length ?? 0)} brani)
+          Ricrea indice ({fmtInt(index.value?.uris.length ?? 0)} brani)
         </Button>
       </div>
     </div>
@@ -522,6 +522,10 @@ export default function MoodPage() {
         sub="Positività (valence) ed energia di ogni brano, misurate dall’audio quando possibile o stimate dall’AI su testo e generi, con confidenza dichiarata."
       />
 
+      <Section kicker="Umore nel tempo" title="Quando eri più felice e quando più triste, secondo ciò che ascoltavi">
+        <MoodTimeline />
+      </Section>
+
       <MoodStatus />
 
       {totKnown > 0 && (
@@ -565,7 +569,7 @@ export default function MoodPage() {
         </div>
       )}
 
-      <Section kicker="Galassia" title="La mappa del tuo gusto" action={<Badge tone="accent">embedding locali</Badge>}>
+      <Section kicker="Galassia" title="La mappa del tuo gusto" action={<Badge tone="accent">embedding via OpenRouter</Badge>}>
         <GalaxySection />
       </Section>
 

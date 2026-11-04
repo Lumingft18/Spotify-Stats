@@ -128,8 +128,9 @@ async function systemPrompt(): Promise<string> {
     `SELECT min(day)::VARCHAR AS a, max(day)::VARCHAR AS b, count(*) AS n FROM p`,
   );
   const hasIndex = !!(await loadIndex());
+  const who = getApp().profile?.displayName ?? null;
   return `Sei l'assistente di "Ascolti", un'app che analizza lo storico Spotify dell'utente in locale.
-Rispondi in italiano, in modo diretto e caldo, con frasi brevi. Prima i fatti, poi (se utile) una curiosità.
+Rispondi in italiano, in modo diretto e caldo, con frasi brevi.${who ? ` L'utente si chiama ${who}: puoi chiamarlo per nome, con misura.` : ''} Prima i fatti, poi (se utile) una curiosità.
 
 REGOLE IMPORTANTI
 - Ogni numero che citi DEVE provenire da un risultato di un tool in questa conversazione. Non inventare mai numeri.

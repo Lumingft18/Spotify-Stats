@@ -1,5 +1,5 @@
 import OpenAI from 'openai';
-import { getApp } from '../lib/store';
+import { getApp, useApp } from '../lib/store';
 
 /** BYOK OpenRouter client (OpenAI-compatible). The key never leaves the browser except towards openrouter.ai. */
 export function llm(): OpenAI {
@@ -13,6 +13,19 @@ export function llm(): OpenAI {
     dangerouslyAllowBrowser: true,
     defaultHeaders: { 'X-Title': 'Ascolti - Spotify Stats' },
   });
+}
+
+/** Reactive version: re-renders when the key or the AI toggle changes. */
+export function useLlmAvailable(): boolean {
+  return useApp((s) => s.settings.connections.llm && !!s.settings.openrouterKey);
+}
+
+/** Validates an OpenRouter key (no tokens spent). */
+export async function checkOpenRouterKey(key: string): Promise<{ ok: boolean; label?: string; limit?: number | null; usage?: number }> {
+  const res = await fetch('https://openrouter.ai/api/v1/key', { headers: { Authorization: `Bearer ${key}` } });
+  if (!res.ok) return { ok: false };
+  const j = (await res.json()) as { data?: { label?: string; limit?: number | null; usage?: number } };
+  return { ok: true, label: j.data?.label, limit: j.data?.limit ?? null, usage: j.data?.usage };
 }
 
 export function llmAvailable(): boolean {

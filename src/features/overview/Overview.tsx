@@ -13,6 +13,8 @@ import { Sparkline } from '../../components/charts/Sparkline';
 import { PlotChart, Plot } from '../../components/charts/PlotChart';
 import { computeInsights } from './insights';
 import { detectEras } from '../../ml/models';
+import { PackagesBanner } from '../../components/PackagesBanner';
+import { profileFirstName } from '../../data/account';
 
 function usePrevWindow(k: Kpi | null) {
   const range = useApp((s) => s.range);
@@ -50,6 +52,7 @@ export function Overview() {
     `SELECT count(*) FILTER (WHERE m.cover IS NOT NULL AND m.cover <> '') AS covers, count(*) AS total FROM tracks t LEFT JOIN meta m USING (uri) WHERE t.plays > 0`,
   );
   const deltas = usePrevWindow(kpi.row);
+  const firstName = profileFirstName(useApp((s) => s.profile));
   const k = kpi.row;
   const hero = topArtists.data?.[0];
   useAccentFrom(hero?.cover);
@@ -77,10 +80,12 @@ export function Overview() {
 
   return (
     <div className="flex flex-col gap-12">
+      <PackagesBanner />
       {/* Hero */}
       <section className="grid items-end gap-8 md:grid-cols-[1.4fr_1fr]">
         <div className="animate-rise">
           <div className="mb-3 text-xs font-medium uppercase tracking-[0.14em] text-text-faint">
+            {firstName ? `Ciao ${firstName} · ` : ''}
             {k?.first_day ? `${fmtDate(k.first_day)} — ${fmtDate(k.last_day)}` : ' '}
           </div>
           {k ? (

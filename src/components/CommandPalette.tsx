@@ -28,6 +28,7 @@ const PAGES = [
   ['Chiedi ai tuoi dati', routes.ask()],
   ['Racconto dell’anno', routes.story()],
   ['Confronta con un amico', routes.compare()],
+  ['Profilo: playlist, libreria, ricerche', routes.profile()],
   ['Impostazioni e privacy', routes.settings()],
 ] as const;
 

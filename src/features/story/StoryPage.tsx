@@ -8,9 +8,10 @@ import { extractAccent } from '../../lib/color';
 import { DOW_LONG, fmtHours, fmtInt, fmtMonth, fmtPct } from '../../lib/format';
 import { MOOD_HEX, MOOD_SQL, moodLabel, type Mood } from '../../lib/mood';
 import { storyCaptions } from '../../llm/narrate';
-import { llmAvailable } from '../../llm/client';
+import { useLlmAvailable } from '../../llm/client';
 import { Button, Spinner } from '../../components/ui';
 import { Cover } from '../../components/Cover';
+import { profileFirstName } from '../../data/account';
 
 interface StoryData {
   year: number;
@@ -201,6 +202,8 @@ export default function StoryPage() {
   const firstYear = bounds ? Number(bounds.min.slice(0, 4)) : lastYear;
   const year = Number(qs.get('year')) || lastYear;
   const story = useAsync(() => loadStory(year), [year]);
+  const ai = useLlmAvailable();
+  const firstName = profileFirstName(useApp((s) => s.profile));
   const [captions, setCaptions] = useState<Record<string, string> | null>(null);
   const [writing, setWriting] = useState(false);
   const d = story.value;
@@ -226,7 +229,7 @@ export default function StoryPage() {
           ))}
         </div>
         <div className="flex gap-2">
-          {d && llmAvailable() && (
+          {d && ai && (
             <Button
               size="sm"
               disabled={writing}
@@ -282,7 +285,7 @@ export default function StoryPage() {
 
       {d && (
         <>
-          <Chapter kicker={`Il tuo ${d.year}`} accentFrom={d.artist?.cover}>
+          <Chapter kicker={firstName ? `Il ${d.year} di ${firstName}` : `Il tuo ${d.year}`} accentFrom={d.artist?.cover}>
             <div className="display text-[clamp(5rem,18vw,13rem)] leading-[0.85]">
               <span className="num font-sans font-medium tracking-tighter">{fmtInt(d.minutes / 60)}</span>
               <span className="text-[0.35em]"> ore</span>

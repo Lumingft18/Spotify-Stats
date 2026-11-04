@@ -3,6 +3,7 @@ import type { MetaRow } from '../data/schema';
 import { idb } from '../lib/idb';
 import { getApp, type ConnectionId } from '../lib/store';
 import { sleep } from './net';
+import { cacheCatalog } from '../lib/catalogCache';
 import { fetchAudioFeatures, fetchCover, fetchLyrics, fetchTags, type TrackRef } from './providers';
 
 export type StepId = 'covers' | 'audiofeatures' | 'lyrics' | 'tags';
@@ -161,6 +162,8 @@ export async function runStep(step: StepId, limit = Infinity): Promise<void> {
       lastFlush = Date.now();
       if (rowsToWrite.length) {
         await upsertMeta(rowsToWrite);
+        // Public catalog data is also kept in a shared local cache (survives other exports / data wipes).
+        if (step === 'covers' || step === 'audiofeatures') void cacheCatalog(rowsToWrite).catch(() => undefined);
         scheduleBump();
       }
       await idb.set(`tried:${step}`, Array.from(tried));

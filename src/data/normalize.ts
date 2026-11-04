@@ -174,6 +174,7 @@ export function appendRecords(
   localize: (epochMs: number) => string,
   seen: Set<string>,
   stats: NormalizeStats,
+  lookup?: Map<string, string>,
 ): void {
   const arr: Raw[] = Array.isArray(data) ? (data as Raw[]) : data && typeof data === 'object' ? [data as Raw] : [];
   for (const r of arr) {
@@ -194,7 +195,11 @@ export function appendRecords(
       stats.invalid++;
       continue;
     }
-    const uri = str(r.spotify_track_uri ?? r.spotify_episode_uri ?? r.audiobook_chapter_uri) || null;
+    let uri = str(r.spotify_track_uri ?? r.spotify_episode_uri ?? r.audiobook_chapter_uri) || null;
+    if (!uri && kind === 'track' && lookup) {
+      // Legacy "account data" history has no URIs: recover them from library/playlists when possible.
+      uri = lookup.get(`${trackName.toLowerCase()}|${str(r.master_metadata_album_artist_name ?? r.artistName).toLowerCase()}`) ?? null;
+    }
     const key = `${tsEnd}|${uri ?? trackName}|${ms}`;
     if (seen.has(key)) {
       stats.duplicates++;
@@ -249,8 +254,15 @@ export function appendRecords(
 
 /** File names worth parsing inside a Spotify export ZIP. */
 export function isHistoryFile(name: string): boolean {
+  return historyKind(name) !== null;
+}
+
+/** 'extended' = full lifetime history (Streaming_History_Audio_*), 'legacy' = last-year history from the account package. */
+export function historyKind(name: string): 'extended' | 'legacy' | null {
   const base = name.split('/').pop() ?? name;
-  if (!base.toLowerCase().endsWith('.json')) return false;
-  if (base.startsWith('._')) return false;
-  return /Streaming_History_Audio|StreamingHistory|endsong|Streaming_History_Podcast/i.test(base) && !/Video/i.test(base);
+  if (!base.toLowerCase().endsWith('.json') || base.startsWith('._') || name.includes('__MACOSX')) return null;
+  if (/Video|podcast/i.test(base)) return null;
+  if (/Streaming_History_Audio|endsong/i.test(base)) return 'extended';
+  if (/^StreamingHistory(_music)?\d*_?\d*\.json$/i.test(base)) return 'legacy';
+  return null;
 }

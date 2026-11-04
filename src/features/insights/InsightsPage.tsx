@@ -3,7 +3,7 @@ import { ThumbsDown, ThumbsUp, Wand2, RefreshCw, Info } from 'lucide-react';
 import { useAsync } from '../../data/useSql';
 import { artistSurvival, detectEras, rediscoveryCandidates, rediscoveryFeedback, trainSkipModel, type Candidate, type Era } from '../../ml/models';
 import { nameErasWithLLM } from '../../llm/narrate';
-import { llmAvailable } from '../../llm/client';
+import { useLlmAvailable } from '../../llm/client';
 import { fmtDate, fmtHours, fmtInt, fmtMonth, fmtPct } from '../../lib/format';
 import { routes } from '../../lib/router';
 import { spotifyId } from '../../enrichment/providers';
@@ -106,6 +106,7 @@ function SkipModel() {
 }
 
 function Eras() {
+  const ai = useLlmAvailable();
   const [v, setV] = useState(0);
   const eras = useAsync(() => detectEras(7), [v]);
   const [busy, setBusy] = useState(false);
@@ -136,7 +137,7 @@ function Eras() {
       <div className="flex flex-wrap items-center gap-2">
         <Button
           size="sm"
-          disabled={!llmAvailable() || busy}
+          disabled={!ai || busy}
           onClick={async () => {
             setBusy(true);
             setErr(null);

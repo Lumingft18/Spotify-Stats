@@ -1,27 +1,20 @@
 import { query, upsertMeta, setClusters } from '../data/db';
 import { idb } from '../lib/idb';
 import { getApp } from '../lib/store';
+import { llm } from '../llm/client';
 import type { MlRequest, MlResponse } from './ml.worker';
 
 export const EMBED_MODELS = {
-  gemma: {
-    id: 'onnx-community/embeddinggemma-2-ONNX',
-    dtype: 'q4',
+  gemini: {
+    id: 'google/gemini-embedding-2',
     dim: 256,
-    label: 'EmbeddingGemma 2 (qualità, ~175 MB, multilingue)',
-    queryPrefix: 'task: search result | query: ',
-    docPrefix: (title: string) => `title: ${title} | text: `,
-  },
-  mini: {
-    id: 'Xenova/paraphrase-multilingual-MiniLM-L12-v2',
-    dtype: 'q8',
-    dim: 384,
-    label: 'MiniLM multilingue (veloce, ~120 MB)',
+    label: 'Gemini Embedding 2 via OpenRouter',
     queryPrefix: '',
     docPrefix: (title: string) => `${title}. `,
   },
 } as const;
 export type EmbedModelKey = keyof typeof EMBED_MODELS;
+export const DEFAULT_EMBED_MODEL: EmbedModelKey = 'gemini';
 
 export interface EmbIndex {
   model: EmbedModelKey;
@@ -31,12 +24,11 @@ export interface EmbIndex {
   builtAt: number;
 }
 
+// Worker is used only for CPU-heavy layout work (UMAP, k-means); embeddings come from the API.
 let worker: Worker | null = null;
-let loadedModel: EmbedModelKey | null = null;
 let reqId = 0;
 const waiters = new Map<number, { resolve: (m: MlResponse) => void; reject: (e: Error) => void }>();
 let progressCb: ((stage: string, loaded?: number, total?: number) => void) | null = null;
-let loadWaiter: { resolve: (device: string) => void; reject: (e: Error) => void } | null = null;
 
 function getWorker(): Worker {
   if (worker) return worker;
@@ -44,16 +36,11 @@ function getWorker(): Worker {
   worker.onmessage = (e: MessageEvent<MlResponse>) => {
     const m = e.data;
     if (m.type === 'progress') progressCb?.(m.stage, m.loaded, m.total);
-    else if (m.type === 'loaded') {
-      loadWaiter?.resolve(m.device);
-      loadWaiter = null;
-    } else if (m.type === 'error') {
-      if (m.id != null) waiters.get(m.id)?.reject(new Error(m.message));
-      else {
-        loadWaiter?.reject(new Error(m.message));
-        loadWaiter = null;
+    else if (m.type === 'error') {
+      if (m.id != null) {
+        waiters.get(m.id)?.reject(new Error(m.message));
+        waiters.delete(m.id);
       }
-      if (m.id != null) waiters.delete(m.id);
     } else if ('id' in m) {
       waiters.get(m.id)?.resolve(m);
       waiters.delete(m.id);
@@ -71,22 +58,25 @@ function call<T extends MlResponse>(msg: WithoutId<Extract<MlRequest, { id: numb
   });
 }
 
-async function ensureModel(key: EmbedModelKey): Promise<string> {
-  if (loadedModel === key) return 'cached';
+/** Embeds texts through OpenRouter (BYOK). Vectors are truncated (Matryoshka) and L2-normalized. */
+export async function embedTexts(texts: string[], key: EmbedModelKey = DEFAULT_EMBED_MODEL, signal?: AbortSignal): Promise<{ vecs: Float32Array; dim: number }> {
   const m = EMBED_MODELS[key];
-  getApp().logNet('huggingface.co', 'modello embeddings (una tantum)');
-  const device = await new Promise<string>((resolve, reject) => {
-    loadWaiter = { resolve, reject };
-    getWorker().postMessage({ type: 'load', model: m.id, dtype: m.dtype, dim: m.dim } satisfies MlRequest);
+  const res = await llm().embeddings.create(
+    { model: m.id, input: texts, dimensions: m.dim, encoding_format: 'float' },
+    { signal },
+  );
+  const rows = [...res.data].sort((a, b) => a.index - b.index);
+  if (rows.length !== texts.length) throw new Error('Risposta embeddings incompleta');
+  const dim = m.dim;
+  const vecs = new Float32Array(texts.length * dim);
+  rows.forEach((r, i) => {
+    const e = r.embedding as number[];
+    let n = 0;
+    for (let j = 0; j < dim; j++) n += (e[j] ?? 0) ** 2;
+    n = Math.sqrt(n) || 1;
+    for (let j = 0; j < dim; j++) vecs[i * dim + j] = (e[j] ?? 0) / n;
   });
-  loadedModel = key;
-  return device;
-}
-
-export async function embedTexts(texts: string[], key: EmbedModelKey): Promise<{ vecs: Float32Array; dim: number }> {
-  await ensureModel(key);
-  const r = await call<Extract<MlResponse, { type: 'embedded' }>>({ type: 'embed', texts });
-  return { vecs: r.vecs, dim: r.dim };
+  return { vecs, dim };
 }
 
 // ---------- index persistence ----------
@@ -95,7 +85,8 @@ let indexCache: EmbIndex | null | undefined;
 
 export async function loadIndex(): Promise<EmbIndex | null> {
   if (indexCache !== undefined) return indexCache;
-  indexCache = (await idb.get<EmbIndex>('emb_index')) ?? null;
+  const idx = (await idb.get<EmbIndex>('emb_index')) ?? null;
+  indexCache = idx && idx.model in EMBED_MODELS ? idx : null;
   return indexCache;
 }
 
@@ -131,21 +122,29 @@ export async function buildIndex(
 ): Promise<EmbIndex> {
   progressCb = (stage, loaded, total) => onProgress(stage, loaded ?? 0, total ?? 0);
   onProgress('Preparazione', 0, 1);
-  const device = await ensureModel(key);
   const rows = await query<DocRow>(
     `SELECT t.uri, t.track, t.artist, t.album, m.tags, m.lyrics FROM tracks t LEFT JOIN meta m USING (uri)
      WHERE t.plays > 0 ORDER BY t.minutes DESC LIMIT ${Math.max(10, Math.floor(limit))}`,
   );
   const dim = EMBED_MODELS[key].dim;
   const vecs = new Float32Array(rows.length * dim);
-  const B = device === 'webgpu' ? 32 : 16;
-  for (let i = 0; i < rows.length; i += B) {
-    if (signal?.aborted) throw new DOMException('Annullato', 'AbortError');
-    const batch = rows.slice(i, i + B);
-    const r = await embedTexts(batch.map((x) => buildDoc(x, key)), key);
-    vecs.set(r.vecs.subarray(0, batch.length * dim), i * dim);
-    onProgress(`Embedding brani (${device === 'webgpu' ? 'GPU' : 'CPU'})`, Math.min(i + B, rows.length), rows.length);
-  }
+  const B = 96;
+  const batches: number[] = [];
+  for (let i = 0; i < rows.length; i += B) batches.push(i);
+  let done = 0;
+  let cursor = 0;
+  const worker = async () => {
+    while (cursor < batches.length) {
+      if (signal?.aborted) throw new DOMException('Annullato', 'AbortError');
+      const i = batches[cursor++];
+      const batch = rows.slice(i, i + B);
+      const r = await embedTexts(batch.map((x) => buildDoc(x, key)), key, signal);
+      vecs.set(r.vecs.subarray(0, batch.length * dim), i * dim);
+      done += batch.length;
+      onProgress('Embedding brani via API', done, rows.length);
+    }
+  };
+  await Promise.all([worker(), worker(), worker()]);
   const index: EmbIndex = { model: key, dim, uris: rows.map((r) => r.uri), vecs, builtAt: Date.now() };
   await idb.set('emb_index', index);
   indexCache = index;

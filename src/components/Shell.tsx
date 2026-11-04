@@ -8,6 +8,7 @@ import {
   MessageCircle,
   BookOpen,
   Users,
+  UserRound,
   Settings,
   Activity,
   Search,
@@ -29,6 +30,7 @@ const NAV = [
   { key: 'ask', href: routes.ask(), label: 'Chiedi', icon: MessageCircle, mobile: true },
   { key: 'story', href: routes.story(), label: 'Racconto', icon: BookOpen },
   { key: 'compare', href: routes.compare(), label: 'Confronta', icon: Users },
+  { key: 'profile', href: routes.profile(), label: 'Profilo', icon: UserRound },
 ];
 
 export function Shell({ children }: { children: ReactNode }) {
@@ -36,6 +38,7 @@ export function Shell({ children }: { children: ReactNode }) {
   const current = path[0] ?? '';
   const jobs = useApp((s) => s.jobs);
   const set = useApp((s) => s.set);
+  const profileName = useApp((s) => s.profile?.displayName ?? s.profile?.username ?? null);
   const running = Object.values(jobs).filter((j) => j.status === 'running');
   const isStory = current === 'story';
 
@@ -60,11 +63,7 @@ export function Shell({ children }: { children: ReactNode }) {
       {/* Desktop rail */}
       <aside className="fixed inset-y-0 left-0 z-30 hidden w-60 flex-col border-r border-border bg-bg/70 px-3 py-5 backdrop-blur-xl lg:flex">
         <a href={routes.overview()} className="mb-6 flex items-center gap-2 px-3">
-          <span className="grid size-7 place-items-center rounded-full bg-[var(--accent)] text-accent-ink">
-            <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden>
-              <path d="M4 15c3-2 9-2 16 1M4 11c4-2.5 11-2.5 16 1M5 7c4-2 10-2 14 .5" stroke="currentColor" strokeWidth="2.4" fill="none" strokeLinecap="round" />
-            </svg>
-          </span>
+          <img src="/favicon.svg" alt="" width={28} height={28} className="rounded-lg" />
           <span className="display text-2xl">Ascolti</span>
         </a>
         <button
@@ -108,6 +107,12 @@ export function Shell({ children }: { children: ReactNode }) {
           >
             <Settings size={17} /> Impostazioni
           </a>
+          {profileName && (
+            <a href={routes.profile()} className="mt-3 flex items-center gap-2 rounded-full px-3 py-1.5 text-sm text-text-muted hover:bg-surface-1 hover:text-text">
+              <span className="grid size-6 place-items-center rounded-full bg-[var(--accent)] text-[11px] font-semibold text-accent-ink">{profileName[0]?.toUpperCase()}</span>
+              <span className="truncate">{profileName}</span>
+            </a>
+          )}
           <div className="mt-3 flex items-center gap-2 px-3 text-[11px] text-text-faint">
             <ShieldCheck size={13} className="text-good" /> Dati solo sul tuo dispositivo
           </div>

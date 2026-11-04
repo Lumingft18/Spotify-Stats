@@ -73,4 +73,5 @@ export const routes = {
   story: (year?: number) => (year ? `#/story?year=${year}` : '#/story'),
   compare: () => '#/compare',
   settings: () => '#/settings',
+  profile: () => '#/profile',
 };

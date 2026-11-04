@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { ArrowUp, Database, Sparkles, Trash2, Square, KeyRound } from 'lucide-react';
 import { runAgent, type AgentMessage, type ChartSpec } from '../../llm/agent';
-import { llmAvailable } from '../../llm/client';
+import { useLlmAvailable } from '../../llm/client';
 import { idb } from '../../lib/idb';
 import { useRoute, routes } from '../../lib/router';
 import { useApp } from '../../lib/store';
@@ -153,7 +153,7 @@ export default function AskPage() {
   const endRef = useRef<HTMLDivElement>(null);
   const autoSent = useRef<string | null>(null);
   const settings = useApp((s) => s.settings);
-  const available = llmAvailable();
+  const available = useLlmAvailable();
 
   useEffect(() => {
     void idb.get<AgentMessage[]>('ask_history').then((h) => h && setHistory(h));

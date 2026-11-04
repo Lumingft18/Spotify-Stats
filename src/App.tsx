@@ -19,6 +19,7 @@ const AskPage = lazy(() => import('./features/ask/AskPage'));
 const StoryPage = lazy(() => import('./features/story/StoryPage'));
 const ComparePage = lazy(() => import('./features/compare/ComparePage'));
 const SettingsPage = lazy(() => import('./features/settings/SettingsPage'));
+const ProfilePage = lazy(() => import('./features/profile/ProfilePage'));
 
 function Router() {
   const { path } = useRoute();
@@ -48,6 +49,8 @@ function Router() {
       return <ComparePage />;
     case 'settings':
       return <SettingsPage />;
+    case 'profile':
+      return <ProfilePage />;
     default:
       return <Overview />;
   }

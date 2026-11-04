@@ -34,11 +34,13 @@
 | 0 — Pulizia e sicurezza | ✅ | Rimossi proxy CORS, AcousticBrainz, client secret Spotify, Pyodide, Plotly. `.gitignore` per gli export. Registro connessioni in Impostazioni. |
 | 1 — DuckDB-WASM | ✅ | Import 77k ascolti in ~1,6 s; riapertura ~1,9 s da IndexedDB (Arrow IPC). Sessioni, `prior_plays`, `plays_seq` calcolati in SQL. Definizione "ascolto" = ≥ 30 s. |
 | 2 — Arricchimento | ✅ | Copertine (oEmbed, una per album, con retry su rate limit), audio features ReccoBeats, testi LRCLIB, tag Last.fm (chiave utente). Job resumable con pausa. Nessuna MusicBrainz: non serve. |
-| 3 — Embeddings | ✅ | transformers.js v4 in Web Worker (WebGPU→WASM), EmbeddingGemma 2 q4 (MRL 256) o MiniLM multilingue; UMAP + k-means (silhouette); galassia canvas con zoom/lazo; ricerca semantica; brani/artisti simili. Audio embeddings (MuQ-MuLan/CLAP) **non** implementati: richiedono audio. |
+| 3 — Embeddings | ✅ | Embedding via OpenRouter (`google/gemini-embedding-2`, 256 dim, chiave utente; ~$0,05 / 1.000 brani). UMAP + k-means nel Web Worker; galassia canvas con zoom/lazo; ricerca semantica; brani/artisti simili. Il modello locale (transformers.js) è stato rimosso su richiesta. Audio embeddings (MuQ-MuLan/CLAP) **non** implementati: richiedono audio. |
 | 4 — Mood v2 | ✅ (da provare con chiave) | Anchor stratificati dai brani ReccoBeats, JSON Schema rigido, 2 campionamenti → confidenza, hold-out di 12 brani per MAE/Pearson. |
 | 5 — Modelli | ✅ | Skip: regressione logistica, split temporale, AUC 0,75 su dati reali, importanza per permutazione. Ere: segmentazione binaria (Hellinger). Kaplan–Meier artisti. Bandit Thompson per la riscoperta. Tipologie di sessione. |
 | 6 — Agente + racconto | ✅ (agente da provare con chiave) | Tool `run_sql` (guard read-only testato), `semantic_search`, `make_chart`, `show_tracks`; tracce ispezionabili. Story mode annuale + immagine 9:16; didascalie AI opzionali. |
 | 7 — Redesign UI/UX | ✅ | Design system (token OKLCH, Instrument Serif + Geist), 8 sezioni, ⌘K, filtro periodo globale, pagine entità, colore dinamico dalle copertine, mobile bottom nav, PWA (manifest + service worker). |
+| 7b — Umore nel tempo | ✅ | Calendario giornaliero per stato d’animo, andamento giorno/settimana/mese (rispetto al neutro o alla media personale), momenti della settimana. |
+| 2b — Pacchetto “Dati dell’account” | ✅ | ZIP separato supportato (anche insieme all’esteso): nome, libreria, playlist, ricerche, inferenze, Wrapped → pagina Profilo e UI personalizzata; storico di 1 anno mappato a URI via libreria/playlist; avviso se manca il secondo pacchetto. Cache catalogo (copertine, audio features) condivisa tra export. |
 | 10.3 — Confronta | ✅ | Solo aggregati salvati; compatibilità artisti + somiglianza semantica. |
 | 12 — Test/CI | ✅ | Vitest: unit + 8 test SQL su export reale (`SPOTIFY_TEST_ZIP`, saltati in CI). GitHub Actions: lint, typecheck, test, build. |
 
