@@ -70,7 +70,7 @@ export const routes = {
   mood: () => '#/mood',
   insights: () => '#/insights',
   ask: (q?: string) => (q ? `#/ask?q=${encodeURIComponent(q)}` : '#/ask'),
-  story: (year?: number) => (year ? `#/story?year=${year}` : '#/story'),
+  story: (year?: number | 'all') => (year !== undefined ? `#/story?year=${year}` : '#/story'),
   compare: () => '#/compare',
   settings: () => '#/settings',
   profile: () => '#/profile',

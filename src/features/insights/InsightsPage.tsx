@@ -233,7 +233,7 @@ function Rediscovery() {
   const ids = c.value.map((x) => spotifyId(x.uri)).filter(Boolean);
   return (
     <div className="flex flex-col gap-4">
-      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
         {c.value.map((x) => (
           <div key={x.uri} className="flex items-center gap-3 rounded-2xl border border-border bg-surface-1/70 p-2.5">
             <Cover src={x.cover} name={x.track} size={52} />

@@ -184,7 +184,7 @@ export default function ProfilePage() {
 
           {profile!.playlists.length > 0 && (
             <Section kicker="Playlist" title="Le tue playlist">
-              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
                 {[...profile!.playlists]
                   .sort((a, b) => (b.lastModified ?? '').localeCompare(a.lastModified ?? ''))
                   .slice(0, 18)

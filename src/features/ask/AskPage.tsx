@@ -195,7 +195,7 @@ export default function AskPage() {
   }, [history, step]);
 
   return (
-    <div className="mx-auto flex max-w-3xl flex-col">
+    <div className="mx-auto flex max-w-4xl flex-col 2xl:max-w-5xl">
       <PageHeader kicker="Chiedi" title="Chiedi ai tuoi dati" sub="Un assistente che interroga il tuo storico con SQL e ricerca semantica. Ogni numero viene da una query che puoi ispezionare." />
 
       {!available && (

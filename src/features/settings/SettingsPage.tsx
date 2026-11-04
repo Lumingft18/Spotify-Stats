@@ -26,9 +26,15 @@ function Toggle({ on, onChange, label }: { on: boolean; onChange: (v: boolean) =
       aria-checked={on}
       aria-label={label}
       onClick={() => onChange(!on)}
-      className={cx('relative h-6 w-11 shrink-0 rounded-full transition-colors', on ? 'bg-[var(--accent)]' : 'bg-surface-3')}
+      className={cx(
+        'relative inline-flex h-6 w-11 shrink-0 items-center rounded-full p-0.5 transition-colors',
+        on ? 'bg-[var(--accent)]' : 'bg-surface-3',
+      )}
     >
-      <span className={cx('absolute top-0.5 size-5 rounded-full bg-white shadow transition-transform', on ? 'translate-x-5' : 'translate-x-0.5')} />
+      <span
+        aria-hidden
+        className={cx('block size-5 rounded-full bg-white shadow transition-transform duration-200', on ? 'translate-x-5' : 'translate-x-0')}
+      />
     </button>
   );
 }
@@ -202,7 +208,7 @@ export default function SettingsPage() {
   ).sort((a, b) => b.at - a.at);
 
   return (
-    <div className="flex max-w-3xl flex-col gap-12">
+    <div className="mx-auto flex max-w-5xl flex-col gap-12">
       <PageHeader kicker="Impostazioni" title="Privacy e preferenze" sub="Tutto è calcolato sul tuo dispositivo. Qui decidi tu cosa può uscire, e verso chi." />
 
       <Section kicker="Connessioni" title="Servizi esterni (tutti facoltativi)">

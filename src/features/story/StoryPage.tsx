@@ -14,7 +14,10 @@ import { Cover } from '../../components/Cover';
 import { profileFirstName } from '../../data/account';
 
 interface StoryData {
+  /** 0 = all years */
   year: number;
+  label: string;
+  byYear: Array<{ year: number; minutes: number; artist: string; cover: string | null; track: string }>;
   minutes: number;
   days: number;
   activeDays: number;
@@ -32,7 +35,8 @@ interface StoryData {
 }
 
 async function loadStory(year: number): Promise<StoryData | null> {
-  const w = `kind = 'track' AND year(day) = ${Math.floor(year)}`;
+  const all = year === 0;
+  const w = all ? `kind = 'track'` : `kind = 'track' AND year(day) = ${Math.floor(year)}`;
   const k = await query<{ minutes: number; active: number; skip: number; uniq: number }>(
     `SELECT sum(minutes) AS minutes, count(DISTINCT day) AS active, avg(skipped::INT) AS skip, count(DISTINCT uri) FILTER (WHERE counted) AS uniq FROM plays WHERE ${w}`,
   );
@@ -52,17 +56,32 @@ async function loadStory(year: number): Promise<StoryData | null> {
   const peak = await query<{ dow: number; hour: number }>(`SELECT dow, hour FROM plays WHERE ${w} GROUP BY ALL ORDER BY sum(minutes) DESC LIMIT 1`);
   const newA = await query<{ n: number }>(`
     WITH f AS (SELECT artist, min(day) AS first_d FROM plays WHERE kind='track' AND counted GROUP BY artist)
-    SELECT count(*) AS n FROM f WHERE year(first_d) = ${Math.floor(year)}`);
-  const newTop = await query<{ artist: string; minutes: number }>(`
+    SELECT count(*) AS n FROM f ${all ? '' : `WHERE year(first_d) = ${Math.floor(year)}`}`);
+  const newTop = all ? [] : await query<{ artist: string; minutes: number }>(`
     WITH f AS (SELECT artist, min(day) AS first_d FROM plays WHERE kind='track' AND counted GROUP BY artist)
     SELECT p.artist, sum(p.minutes) AS minutes FROM plays p JOIN f USING (artist)
     WHERE year(f.first_d) = ${Math.floor(year)} AND ${w.replace(/kind/g, 'p.kind').replace('year(day)', 'year(p.day)')} GROUP BY 1 ORDER BY 2 DESC LIMIT 1`);
   const isLeap = (y: number) => (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0;
+  const span = await query<{ days: number }>(`SELECT date_diff('day', min(day), max(day)) + 1 AS days FROM plays WHERE ${w}`);
+  const byYear = all
+    ? await query<{ year: number; minutes: number; artist: string; cover: string | null; track: string }>(`
+        WITH y AS (
+          SELECT year(p.day) AS year, p.artist, p.track, p.minutes, m.cover FROM plays p LEFT JOIN meta m USING (uri) WHERE p.kind = 'track'),
+        a AS (SELECT year, artist, sum(minutes) AS m, arg_max(cover, minutes) FILTER (WHERE cover <> '') AS cover FROM y GROUP BY ALL),
+        t AS (SELECT year, track, artist, sum(minutes) AS m FROM y GROUP BY ALL)
+        SELECT tot.year, tot.minutes, ta.artist, ta.cover, tt.track || ' — ' || tt.artist AS track
+        FROM (SELECT year, sum(minutes) AS minutes FROM y GROUP BY year) tot
+        JOIN (SELECT * FROM a QUALIFY row_number() OVER (PARTITION BY year ORDER BY m DESC) = 1) ta USING (year)
+        JOIN (SELECT * FROM t QUALIFY row_number() OVER (PARTITION BY year ORDER BY m DESC) = 1) tt USING (year)
+        ORDER BY tot.year`)
+    : [];
   const total = k[0].minutes;
   return {
     year,
+    label: all ? 'tutti gli anni' : String(year),
+    byYear,
     minutes: total,
-    days: isLeap(year) ? 366 : 365,
+    days: all ? span[0]?.days ?? 0 : isLeap(year) ? 366 : 365,
     activeDays: k[0].active,
     topMonth: topMonth[0] ?? null,
     topDay: topDay[0] ?? null,
@@ -86,7 +105,7 @@ function defaultCaptions(d: StoryData): Record<string, string> {
     track: d.tracks5[0] ? `“${d.tracks5[0].track}” è il brano che hai fatto ripartire più volte.` : '',
     mood: d.mood ? `Il tuo anno ha suonato soprattutto ${moodLabel(d.mood.mood).toLowerCase()}.` : 'Arricchisci il mood per scoprire che suono ha avuto il tuo anno.',
     habits: d.peak ? `Il tuo momento: ${DOW_LONG[d.peak.dow - 1]} verso le ${d.peak.hour}.` : '',
-    outro: `${fmtInt(d.uniqueTracks)} brani diversi, ${fmtInt(d.newArtists)} artisti scoperti. Alla prossima.`,
+    outro: `${fmtInt(d.uniqueTracks)} brani diversi, ${fmtInt(d.newArtists)} artisti ${d.year ? "scoperti" : "in tutto"}. Alla prossima.`,
   };
 }
 
@@ -112,7 +131,7 @@ async function shareCard(d: StoryData) {
   await document.fonts.ready;
   ctx.fillStyle = '#9aa0ab';
   ctx.font = '500 40px "Geist Variable", system-ui';
-  ctx.fillText(`IL MIO ${d.year} IN MUSICA`, 90, 180);
+  ctx.fillText(d.year ? `IL MIO ${d.year} IN MUSICA` : 'TUTTA LA MIA MUSICA', 90, 180);
   ctx.fillStyle = '#f4f5f8';
   ctx.font = '400 230px "Instrument Serif", Georgia, serif';
   ctx.fillText(`${fmtInt(d.minutes / 60)}`, 80, 420);
@@ -167,7 +186,7 @@ async function shareCard(d: StoryData) {
   const url = c.toDataURL('image/png');
   const a = document.createElement('a');
   a.href = url;
-  a.download = `ascolti-${d.year}.png`;
+  a.download = `ascolti-${d.year || 'tutti-gli-anni'}.png`;
   a.click();
 }
 
@@ -186,8 +205,8 @@ function Chapter({ children, accentFrom, kicker }: { children: React.ReactNode; 
     return () => io.disconnect();
   }, [accentFrom]);
   return (
-    <section ref={ref} className="relative flex min-h-[100svh] flex-col justify-center px-6 py-20 md:px-16">
-      <div className="mx-auto w-full max-w-4xl animate-rise">
+    <section ref={ref} data-chapter={kicker} className="relative flex min-h-[100svh] flex-col justify-center px-6 py-24 md:px-16">
+      <div className="story-reveal mx-auto w-full max-w-5xl 2xl:max-w-7xl">
         <div className="mb-6 text-xs font-medium uppercase tracking-[0.2em] text-text-faint">{kicker}</div>
         {children}
       </div>
@@ -200,7 +219,7 @@ export default function StoryPage() {
   const bounds = useApp((s) => s.bounds);
   const lastYear = bounds ? Number(bounds.max.slice(0, 4)) : new Date().getFullYear();
   const firstYear = bounds ? Number(bounds.min.slice(0, 4)) : lastYear;
-  const year = Number(qs.get('year')) || lastYear;
+  const year = qs.get('year') === 'all' ? 0 : Number(qs.get('year')) || lastYear;
   const story = useAsync(() => loadStory(year), [year]);
   const ai = useLlmAvailable();
   const firstName = profileFirstName(useApp((s) => s.profile));
@@ -218,10 +237,119 @@ export default function StoryPage() {
 
   const years = Array.from({ length: lastYear - firstYear + 1 }, (_, i) => lastYear - i);
 
+  // Chapter tracking: reveal-on-view, active dot, keyboard navigation (↑/↓, PagSu/PagGiù, spazio, Home/Fine).
+  const scroller = useRef<HTMLDivElement>(null);
+  const [chapters, setChapters] = useState<string[]>([]);
+  const [active, setActive] = useState(0);
+  useEffect(() => {
+    const root = scroller.current;
+    if (!root || !d) return;
+    const sections = Array.from(root.querySelectorAll<HTMLElement>('section[data-chapter]'));
+    setChapters(sections.map((s) => s.dataset.chapter ?? ''));
+    // Reveal when a chapter enters the viewport.
+    const reveal = new IntersectionObserver(
+      (entries) => entries.forEach((e) => e.isIntersecting && e.target.classList.add('is-visible')),
+      { root, threshold: 0.15 },
+    );
+    // Active chapter = the one crossing the vertical centre of the screen (works for tall chapters too).
+    const centre = new IntersectionObserver(
+      (entries) => {
+        for (const e of entries) if (e.isIntersecting) setActive(sections.indexOf(e.target as HTMLElement));
+      },
+      { root, rootMargin: '-50% 0px -50% 0px', threshold: 0 },
+    );
+    const io = { disconnect: () => (reveal.disconnect(), centre.disconnect()) };
+    sections.forEach((s) => {
+      reveal.observe(s);
+      centre.observe(s);
+    });
+    return () => io.disconnect();
+  }, [d]);
+
+  // Back to the top and focus (for keyboard nav) only when the year changes — not on background data refreshes.
+  useEffect(() => {
+    const root = scroller.current;
+    if (!root) return;
+    root.scrollTo({ top: 0, behavior: 'auto' });
+    root.focus({ preventScroll: true });
+  }, [year]);
+
+  const goTo = (i: number) => {
+    const root = scroller.current;
+    const sections = root?.querySelectorAll<HTMLElement>('section[data-chapter]');
+    if (!sections?.length) return;
+    const idx = Math.max(0, Math.min(sections.length - 1, i));
+    const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+    root!.scrollTo({ top: sections[idx].offsetTop, behavior: reduce ? 'auto' : 'smooth' });
+  };
+
+  const currentIndex = () => {
+    const root = scroller.current;
+    if (!root) return 0;
+    const mid = root.scrollTop + root.clientHeight / 2;
+    const sections = Array.from(root.querySelectorAll<HTMLElement>('section[data-chapter]'));
+    const i = sections.findIndex((s) => s.offsetTop <= mid && s.offsetTop + s.offsetHeight > mid);
+    return i < 0 ? 0 : i;
+  };
+
+  const onKey = (e: React.KeyboardEvent) => {
+    const root = scroller.current;
+    if (!root || (e.target as HTMLElement).closest('button, a, input')) return;
+    const i = currentIndex();
+    const sec = root.querySelectorAll<HTMLElement>('section[data-chapter]')[i];
+    // Long chapters: let the arrow keys scroll natively until the chapter's end is on screen.
+    const rest = sec ? sec.offsetTop + sec.offsetHeight - (root.scrollTop + root.clientHeight) : 0;
+    if (['ArrowDown', 'PageDown', ' ', 'j'].includes(e.key) && !e.shiftKey) {
+      if (rest > 8 && (e.key === 'ArrowDown' || e.key === 'j')) return;
+      e.preventDefault();
+      goTo(i + 1);
+    } else if (['ArrowUp', 'PageUp', 'k'].includes(e.key) || (e.key === ' ' && e.shiftKey)) {
+      e.preventDefault();
+      goTo(root.scrollTop > (sec?.offsetTop ?? 0) + 8 ? i : i - 1);
+    } else if (e.key === 'Home') {
+      e.preventDefault();
+      goTo(0);
+    } else if (e.key === 'End') {
+      e.preventDefault();
+      goTo(chapters.length - 1);
+    }
+  };
+
   return (
-    <div className="story-snap h-[100svh] overflow-y-auto" style={{ background: 'radial-gradient(1200px 700px at 80% 0%, color-mix(in oklch, var(--accent) 22%, transparent), transparent 70%), var(--color-bg)' }}>
-      <div className="fixed left-0 right-0 top-0 z-20 flex items-center justify-between gap-2 px-4 py-3 lg:left-60">
+    <div
+      ref={scroller}
+      tabIndex={0}
+      onKeyDown={onKey}
+      aria-label="Racconto: usa le frecce o la rotella per scorrere i capitoli"
+      className="story-snap h-[100svh] overflow-y-auto outline-none"
+      style={{ background: 'radial-gradient(1200px 700px at 80% 0%, color-mix(in oklch, var(--accent) 22%, transparent), transparent 70%), var(--color-bg)' }}>
+      {chapters.length > 1 && (
+        <>
+          <nav aria-label="Capitoli" className="fixed right-3 top-1/2 z-20 hidden -translate-y-1/2 flex-col gap-2.5 md:flex">
+            {chapters.map((c, i) => (
+              <button
+                key={c}
+                onClick={() => goTo(i)}
+                aria-label={`Vai a: ${c}`}
+                aria-current={i === active ? 'step' : undefined}
+                title={c}
+                className={`group flex items-center justify-end gap-2`}
+              >
+                <span className="pointer-events-none whitespace-nowrap rounded-full bg-surface-2/90 px-2 py-0.5 text-[11px] text-text-muted opacity-0 transition-opacity group-hover:opacity-100">{c}</span>
+                <span className={`block rounded-full transition-all ${i === active ? 'h-6 w-1.5 bg-[var(--accent)]' : 'size-1.5 bg-text-faint/60 group-hover:bg-text'}`} />
+              </button>
+            ))}
+          </nav>
+          <div className="fixed bottom-0 left-0 right-0 z-20 h-0.5 bg-surface-2 lg:left-60" aria-hidden>
+            <div className="h-full bg-[var(--accent)] transition-[width] duration-500" style={{ width: `${((active + 1) / chapters.length) * 100}%` }} />
+          </div>
+        </>
+      )}
+      <div className="fixed left-0 right-0 top-0 z-20 flex items-center justify-between gap-2 bg-gradient-to-b from-bg/90 to-transparent px-4 py-3 backdrop-blur-[2px] lg:left-60">
         <div className="flex gap-1 overflow-x-auto">
+          <button onClick={() => navigate(routes.story('all'))} className={`h-8 rounded-full px-3 text-sm ${year === 0 ? 'bg-surface-3 text-text' : 'text-text-muted hover:bg-surface-2'}`}>
+            Tutti gli anni
+          </button>
           {years.map((y) => (
             <button key={y} onClick={() => navigate(routes.story(y))} className={`h-8 rounded-full px-3 text-sm ${y === year ? 'bg-surface-3 text-text' : 'text-text-muted hover:bg-surface-2'}`}>
               {y}
@@ -238,7 +366,7 @@ export default function StoryPage() {
                 try {
                   setCaptions(
                     await storyCaptions({
-                      anno: d.year,
+                      anno: d.label,
                       ore: Math.round(d.minutes / 60),
                       giorni_attivi: d.activeDays,
                       mese_top: d.topMonth ? fmtMonth(d.topMonth.ym) : '',
@@ -276,29 +404,31 @@ export default function StoryPage() {
         </div>
       </div>
 
-      {story.loading && (
+      {story.loading && !d && (
         <div className="flex h-full items-center justify-center gap-3 text-text-muted">
-          <Spinner /> Preparo il racconto del {year}…
+          <Spinner /> Preparo il racconto {year ? `del ${year}` : 'di tutti gli anni'}…
         </div>
       )}
-      {!story.loading && !d && <div className="flex h-full items-center justify-center text-text-muted">Nessun ascolto nel {year}.</div>}
+      {!story.loading && !d && <div className="flex h-full items-center justify-center text-text-muted">Nessun ascolto {year ? `nel ${year}` : ''}.</div>}
 
       {d && (
         <>
-          <Chapter kicker={firstName ? `Il ${d.year} di ${firstName}` : `Il tuo ${d.year}`} accentFrom={d.artist?.cover}>
+          <Chapter kicker={d.year ? (firstName ? `Il ${d.year} di ${firstName}` : `Il tuo ${d.year}`) : firstName ? `Tutti gli anni di ${firstName}` : 'Tutti i tuoi anni'} accentFrom={d.artist?.cover}>
             <div className="display text-[clamp(5rem,18vw,13rem)] leading-[0.85]">
               <span className="num font-sans font-medium tracking-tighter">{fmtInt(d.minutes / 60)}</span>
               <span className="text-[0.35em]"> ore</span>
             </div>
             <p className="mt-8 max-w-xl text-2xl text-text-muted">{cap.intro}</p>
-            <ChevronDown className="mt-16 animate-bounce text-text-faint" />
+            <button onClick={() => goTo(1)} aria-label="Capitolo successivo" className="mt-16 flex items-center gap-2 text-sm text-text-faint hover:text-text">
+              <ChevronDown className="animate-bounce" /> scorri o usa ↓
+            </button>
           </Chapter>
 
           <Chapter kicker="Il ritmo">
             <div className="grid gap-10 md:grid-cols-3">
               <div>
                 <div className="num text-6xl">{fmtInt(d.activeDays)}</div>
-                <div className="text-text-muted">giorni con musica su {d.days}</div>
+                <div className="text-text-muted">giorni con musica su {fmtInt(d.days)}</div>
               </div>
               {d.topMonth && (
                 <div>
@@ -315,6 +445,37 @@ export default function StoryPage() {
             </div>
             <p className="mt-10 max-w-xl text-2xl text-text-muted">{cap.time}</p>
           </Chapter>
+
+          {d.byYear.length > 1 && (
+            <Chapter kicker="Anno per anno" accentFrom={d.byYear[d.byYear.length - 1].cover}>
+              <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+                {d.byYear.map((y) => {
+                  const max = Math.max(...d.byYear.map((x) => x.minutes));
+                  return (
+                    <button
+                      key={y.year}
+                      onClick={() => navigate(routes.story(y.year))}
+                      className="group flex items-center gap-4 rounded-2xl border border-border bg-surface-1/70 p-4 text-left transition-colors hover:bg-surface-2"
+                    >
+                      <Cover src={y.cover} name={y.artist} size={72} round />
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-baseline justify-between gap-2">
+                          <span className="display text-4xl group-hover:text-[var(--accent)]">{y.year}</span>
+                          <span className="num text-sm text-text-muted">{fmtHours(y.minutes)}</span>
+                        </div>
+                        <div className="truncate font-medium">{y.artist}</div>
+                        <div className="truncate text-xs text-text-faint">{y.track}</div>
+                        <div className="mt-2 h-1 rounded-full bg-surface-3">
+                          <div className="h-full rounded-full bg-[var(--accent)]" style={{ width: `${(y.minutes / max) * 100}%` }} />
+                        </div>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+              <p className="mt-8 max-w-xl text-2xl text-text-muted">Clicca un anno per aprire il suo racconto.</p>
+            </Chapter>
+          )}
 
           {d.artist && (
             <Chapter kicker="Il tuo artista" accentFrom={d.artist.cover}>
@@ -382,7 +543,7 @@ export default function StoryPage() {
               </div>
               <div>
                 <div className="num text-6xl">{fmtInt(d.newArtists)}</div>
-                <div className="text-text-muted">artisti scoperti{d.newTop ? `, il primo: ${d.newTop.artist}` : ''}</div>
+                <div className="text-text-muted">{d.year ? 'artisti scoperti' : 'artisti ascoltati'}{d.newTop ? `, il primo: ${d.newTop.artist}` : ''}</div>
               </div>
             </div>
             <p className="mt-10 max-w-xl text-2xl text-text-muted">{cap.habits}</p>

@@ -125,6 +125,20 @@ body {
   }
 }
 
-/* Story snap scrolling */
-.story-snap { scroll-snap-type: y mandatory; }
-.story-snap > section { scroll-snap-align: start; }
+/* Story scrolling: natural scroll (no CSS snap — snapping fights the wheel/trackpad and traps
+   chapters taller than the viewport), with reveal-on-view and explicit chapter navigation. */
+.story-snap {
+  overscroll-behavior-y: contain;
+  scrollbar-width: none;
+}
+.story-snap::-webkit-scrollbar { display: none; }
+.story-reveal {
+  opacity: 0;
+  transform: translateY(28px);
+  transition: opacity 0.7s ease, transform 0.8s cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+section.is-visible .story-reveal { opacity: 1; transform: none; }
+@media (prefers-reduced-motion: reduce) {
+  .story-snap { scroll-behavior: auto; }
+  .story-reveal { opacity: 1; transform: none; }
+}

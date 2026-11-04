@@ -121,8 +121,8 @@ export function Shell({ children }: { children: ReactNode }) {
 
       {/* Top bar */}
       {!isStory && (
-        <header className="sticky top-0 z-20 border-b border-border bg-bg/70 backdrop-blur-xl lg:ml-60">
-          <div className="mx-auto flex h-14 max-w-6xl items-center gap-3 px-4 md:px-8">
+        <header className="sticky top-0 z-20 border-b border-border bg-bg/70 backdrop-blur-xl lg:pl-60">
+          <div className="mx-auto flex h-14 w-full max-w-[2880px] items-center gap-3 px-4 md:px-8 2xl:px-14">
             <a href={routes.overview()} className="display text-xl lg:hidden">
               Ascolti
             </a>
@@ -150,8 +150,8 @@ export function Shell({ children }: { children: ReactNode }) {
         </header>
       )}
 
-      <main id="main" className={cx('lg:ml-60', !isStory && 'mx-auto max-w-6xl px-4 pb-28 pt-8 md:px-8 lg:pb-16 lg:pt-10')}>
-        {children}
+      <main id="main" className="lg:pl-60">
+        {isStory ? children : <div className="mx-auto w-full max-w-[2880px] px-4 pb-28 pt-8 md:px-8 lg:pb-16 lg:pt-10 2xl:px-14">{children}</div>}
       </main>
 
       {/* Mobile bottom nav */}

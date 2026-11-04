@@ -45,7 +45,7 @@ export function Overview() {
   const monthly = useSql<{ ym: string; minutes: number }>(MONTHLY_SQL);
   const topArtists = useSql<TopRow>(topSql('artists', 'minutes', 5));
   const topTracks = useSql<TopRow>(topSql('tracks', 'minutes', 5));
-  const topAlbums = useSql<TopRow>(topSql('albums', 'minutes', 6));
+  const topAlbums = useSql<TopRow>(topSql('albums', 'minutes', 10));
   const insights = useAsync(computeInsights);
   const eras = useAsync(() => detectEras(6));
   const coverage = useSqlOne<{ covers: number; total: number }>(
@@ -205,9 +205,9 @@ export function Overview() {
       </div>
 
       <Section kicker="Top album" title="Gli album più consumati" action={<a className="flex items-center gap-1 text-sm text-[var(--accent)]" href={routes.explore('albums')}>Tutti <ArrowRight size={14} /></a>}>
-        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
-          {(topAlbums.data ?? []).map((a) => (
-            <a key={a.label + a.artist} href={routes.album(a.artist, a.label)} className="group min-w-0">
+        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6 2xl:grid-cols-8 min-[2400px]:grid-cols-10">
+          {(topAlbums.data ?? []).map((a, i) => (
+            <a key={a.label + a.artist} href={routes.album(a.artist, a.label)} className={`group min-w-0 ${i >= 8 ? 'hidden min-[2400px]:block' : i >= 6 ? 'hidden 2xl:block' : ''}`}>
               <Cover src={a.cover} name={a.label} size="fill" className="rounded-xl transition-transform group-hover:-translate-y-0.5" />
               <div className="mt-2 truncate text-sm font-medium group-hover:text-[var(--accent)]">{a.label}</div>
               <div className="truncate text-xs text-text-faint">{a.artist} · {fmtHours(a.minutes)}</div>

@@ -127,7 +127,7 @@ export default function ArtistPage({ name }: { name: string }) {
 
       {albums.data && albums.data.length > 0 && (
         <Section kicker="Album" title="La sua discografia, nei tuoi ascolti">
-          <div className="grid grid-cols-2 gap-4 sm:grid-cols-4 lg:grid-cols-6">
+          <div className="grid grid-cols-2 gap-4 sm:grid-cols-4 lg:grid-cols-6 2xl:grid-cols-8 min-[2400px]:grid-cols-10">
             {albums.data.map((al) => (
               <a key={al.album} href={routes.album(name, al.album)} className="group min-w-0">
                 <Cover src={al.cover} name={al.album} size="fill" className="rounded-xl" />

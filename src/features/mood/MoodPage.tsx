@@ -373,7 +373,7 @@ function GalaxySection() {
       {hits && (
         <div>
           <div className="mb-2 text-sm text-text-muted">I brani più vicini a “{q}”</div>
-          <div className="grid grid-cols-1 gap-1 sm:grid-cols-2 lg:grid-cols-3">
+          <div className="grid grid-cols-1 gap-1 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
             {hitRows.map((h) => (
               <a key={h.uri} href={routes.track(h.uri)} className="flex items-center gap-3 rounded-xl p-2 hover:bg-surface-2">
                 <div className="num w-10 text-right text-xs text-text-faint">{Math.round(h.score * 100)}</div>
@@ -413,7 +413,7 @@ function GalaxySection() {
               </Button>
             </div>
           </div>
-          <div className="grid grid-cols-1 gap-1 sm:grid-cols-2 lg:grid-cols-3">
+          <div className="grid grid-cols-1 gap-1 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
             {selRows.slice(0, 18).map((r) => (
               <a key={r.uri} href={routes.track(r.uri)} className="truncate rounded-lg px-2 py-1 text-sm hover:bg-surface-2">
                 {r.track} <span className="text-text-faint">— {r.artist}</span>
@@ -582,7 +582,7 @@ function TopMoodTracks() {
   const [mood, setMood] = useState<(typeof MOODS)[number]['id']>('malinconico');
   const rows = useSql<{ uri: string; track: string; artist: string; cover: string | null; minutes: number }>(
     `SELECT uri, any_value(track) AS track, any_value(artist) AS artist, any_value(cover) AS cover, sum(minutes) AS minutes
-     FROM p WHERE ${MOOD_SQL()} = ? GROUP BY uri ORDER BY minutes DESC LIMIT 12`,
+     FROM p WHERE ${MOOD_SQL()} = ? GROUP BY uri ORDER BY minutes DESC LIMIT 20`,
     [mood],
   );
   return (
@@ -592,9 +592,9 @@ function TopMoodTracks() {
       action={<Segmented value={mood} onChange={setMood} options={MOODS.filter((m) => m.id !== 'neutrale').map((m) => ({ value: m.id, label: m.label }))} />}
     >
       {rows.data?.length ? (
-        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
-          {rows.data.map((r) => (
-            <a key={r.uri} href={routes.track(r.uri)} className="group min-w-0">
+        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6 2xl:grid-cols-8 min-[2400px]:grid-cols-10">
+          {rows.data.map((r, i) => (
+            <a key={r.uri} href={routes.track(r.uri)} className={`group min-w-0 ${i >= 16 ? 'hidden min-[2400px]:block' : i >= 12 ? 'hidden 2xl:block' : ''}`}>
               <Cover src={r.cover} name={r.track} size="fill" className="rounded-xl" />
               <div className="mt-2 truncate text-sm group-hover:text-[var(--accent)]">{r.track}</div>
               <div className="truncate text-xs text-text-faint">{r.artist}</div>
