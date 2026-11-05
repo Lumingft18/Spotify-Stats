@@ -52,4 +52,5 @@ curl -s localhost:5173/__debug/idb            # chiavi IndexedDB (?key=… per l
 curl -s -X POST localhost:5173/__debug/sql -d '{"sql":"SELECT mood_source, count(*) FROM meta GROUP BY 1"}'
 curl -s -X POST localhost:5173/__debug/navigate -d '{"hash":"#/mood"}'
 curl -s localhost:5173/__debug/reload         # ricarica la pagina
+curl -s 'localhost:5173/__debug/dom?sel=h1'   # elementi: dimensioni + testo
 ```

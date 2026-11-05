@@ -273,7 +273,7 @@ export default function AskPage() {
       )}
 
       <form
-        className="sticky bottom-20 mt-8 lg:bottom-6"
+        className="no-print sticky bottom-20 mt-8 lg:bottom-6"
         onSubmit={(e) => {
           e.preventDefault();
           void send(input);

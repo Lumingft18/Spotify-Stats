@@ -20,6 +20,7 @@ const StoryPage = lazy(() => import('./features/story/StoryPage'));
 const ComparePage = lazy(() => import('./features/compare/ComparePage'));
 const SettingsPage = lazy(() => import('./features/settings/SettingsPage'));
 const ProfilePage = lazy(() => import('./features/profile/ProfilePage'));
+const ReportPage = lazy(() => import('./features/report/ReportPage'));
 
 function Router() {
   const { path } = useRoute();
@@ -56,8 +57,24 @@ function Router() {
   }
 }
 
+/** The PDF report renders without the app chrome (sidebar, top bar). */
+function ReportRoute() {
+  return (
+    <Suspense
+      fallback={
+        <div className="flex items-center gap-2 p-10 text-text-muted">
+          <Spinner /> Caricamento…
+        </div>
+      }
+    >
+      <ReportPage />
+    </Suspense>
+  );
+}
+
 export default function App() {
   const status = useApp((s) => s.status);
+  const isReport = useRoute().path[0] === 'report';
 
   useEffect(() => {
     prewarm();
@@ -77,6 +94,7 @@ export default function App() {
     );
   }
   if (status !== 'ready') return <Onboarding />;
+  if (isReport) return <ReportRoute />;
   return (
     <Shell>
       <Suspense

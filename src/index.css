@@ -142,3 +142,39 @@ section.is-visible .story-reveal { opacity: 1; transform: none; }
   .story-snap { scroll-behavior: auto; }
   .story-reveal { opacity: 1; transform: none; }
 }
+
+/* ---------- PDF report (#/report): everything stacked, printed by the browser ---------- */
+.report-toolbar {
+  position: sticky; top: 0; z-index: 40;
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 10px 24px; border-bottom: 1px solid var(--color-border);
+  background: color-mix(in oklch, var(--color-bg) 88%, transparent); backdrop-filter: blur(16px);
+}
+.report { margin: 0 auto; padding: 0 48px 48px; }
+.report-part { padding-top: 56px; }
+.report-part + .report-part { break-before: page; }
+.report-cover { min-height: 1500px; display: flex; flex-direction: column; justify-content: center; }
+.report-part-title {
+  margin-bottom: 28px; padding-bottom: 10px; border-bottom: 1px solid var(--color-border);
+  font-size: 12px; font-weight: 500; letter-spacing: 0.2em; text-transform: uppercase; color: var(--color-text-faint);
+}
+/* Everything visible immediately: no entrance animations, no reveal-on-scroll. */
+.report *, .report *::before, .report *::after { animation: none !important; transition: none !important; }
+.report .story-reveal { opacity: 1; transform: none; }
+/* Racconto: inline instead of its own full-screen scroller; hide its fixed chapter nav/top bar. */
+.report .story-snap { height: auto; overflow: visible; }
+.report .story-snap .fixed { display: none; }
+.report section[data-chapter] { min-height: 0; padding-block: 48px; break-inside: avoid; }
+.report .sticky { position: static; }
+.report .no-print { display: none !important; }
+
+@page { size: 1280px 1810px; margin: 0; }
+@media print {
+  html, body { background: var(--color-bg) !important; }
+  html.report-mode, html.report-mode body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .no-print { display: none !important; }
+  .report { width: 1280px !important; }
+  .report section, .report li, .report [class*="rounded-"] { break-inside: avoid; }
+  .report-cover { min-height: 1700px; }
+  .page-glow { background-attachment: scroll; }
+}

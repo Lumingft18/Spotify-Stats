@@ -12,9 +12,9 @@ import { fmtHours, fmtInt } from '../../lib/format';
 
 const PAGE = 50;
 
-export default function Explore() {
+export default function Explore({ kind: fixedKind }: { kind?: TopKind } = {}) {
   const { query } = useRoute();
-  const kind = (['artists', 'tracks', 'albums'].includes(query.get('kind') ?? '') ? query.get('kind') : 'artists') as TopKind;
+  const kind = fixedKind ?? ((['artists', 'tracks', 'albums'].includes(query.get('kind') ?? '') ? query.get('kind') : 'artists') as TopKind);
   const [metric, setMetric] = useState<'minutes' | 'plays'>('minutes');
   const [q, setQ] = useState('');
   const [debounced, setDebounced] = useState('');

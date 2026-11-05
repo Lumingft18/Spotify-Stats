@@ -4,6 +4,7 @@ import { lyricsValenceCandidates, moodCandidates, runLyricsValence, runMoodV2, t
 import { applyMoodAdjustments } from '../data/moodAdjust';
 import { persistMeta } from '../data/db';
 import { getApp } from '../lib/store';
+import { isEnrichmentHeld } from './pause';
 
 export const MOOD_AI_JOB = 'mood_llm';
 const LABEL = 'Mood AI';
@@ -66,7 +67,7 @@ export async function startMoodAi(opts: { limit: number; samples?: 1 | 2 | 3 }):
 /** Runs only when enabled in Impostazioni, a key is set and some tracks still lack a mood. */
 export async function autoMoodAi(): Promise<void> {
   const s = getApp().settings;
-  if (!s.autoMoodAi || !moodAiAvailable() || ctrl) return;
+  if (!s.autoMoodAi || !moodAiAvailable() || ctrl || isEnrichmentHeld()) return;
   if (!(await moodCandidates(1)).length && !(await lyricsValenceCandidates(1)).length) return;
   await startMoodAi({ limit: s.autoMoodAiLimit }).catch(() => undefined);
 }

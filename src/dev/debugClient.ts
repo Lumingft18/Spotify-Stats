@@ -53,6 +53,18 @@ async function handle(op: string, payload: Record<string, unknown> | null): Prom
       location.hash = hash;
       return { ok: true, url: location.href };
     }
+    case 'dom': {
+      const sel = String(payload?.sel ?? 'body');
+      const els = Array.from(document.querySelectorAll<HTMLElement>(sel)).slice(0, Number(payload?.limit ?? 50));
+      return {
+        count: document.querySelectorAll(sel).length,
+        scrollHeight: document.documentElement.scrollHeight,
+        items: els.map((e) => {
+          const r = e.getBoundingClientRect();
+          return { tag: e.tagName.toLowerCase(), id: e.id || undefined, cls: e.className?.toString().slice(0, 80), w: Math.round(r.width), h: Math.round(r.height), text: (e.innerText ?? '').replace(/\s+/g, ' ').slice(0, Number(payload?.chars ?? 200)) };
+        }),
+      };
+    }
     case 'reload':
       setTimeout(() => location.reload(), 100);
       return { ok: true };

@@ -5,6 +5,7 @@ import { getApp, type ConnectionId } from '../lib/store';
 import { sleep } from './net';
 import { cacheCatalog } from '../lib/catalogCache';
 import { autoMoodAi, stopMoodAi } from './moodAi';
+import { isEnrichmentHeld } from './pause';
 import { applyMoodAdjustments } from '../data/moodAdjust';
 import { fetchArtistTagsMB, fetchAudioFeatures, fetchCover, fetchLyrics, fetchTags, type TrackRef } from './providers';
 
@@ -161,7 +162,7 @@ export function runStep(step: StepId, limit = Infinity): Promise<void> {
 }
 
 async function runStepNow(step: StepId, limit: number): Promise<void> {
-  if (controllers.has(step)) return;
+  if (controllers.has(step) || isEnrichmentHeld()) return;
   const app = getApp();
   const d = STEPS[step];
   if (!app.settings.connections[d.connection]) return;

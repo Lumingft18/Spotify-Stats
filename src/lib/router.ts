@@ -74,4 +74,5 @@ export const routes = {
   compare: () => '#/compare',
   settings: () => '#/settings',
   profile: () => '#/profile',
+  report: () => '#/report',
 };

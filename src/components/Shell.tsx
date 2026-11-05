@@ -13,6 +13,7 @@ import {
   Activity,
   Search,
   ShieldCheck,
+  FileDown,
 } from 'lucide-react';
 import { useRoute, routes } from '../lib/router';
 import { useApp } from '../lib/store';
@@ -107,6 +108,9 @@ export function Shell({ children }: { children: ReactNode }) {
           >
             <Settings size={17} /> Impostazioni
           </a>
+          <a href={routes.report()} className="flex h-9 items-center gap-3 rounded-full px-3 text-sm text-text-muted hover:bg-surface-1 hover:text-text" title="Tutte le sezioni in un unico PDF">
+            <FileDown size={17} /> Esporta PDF
+          </a>
           {profileName && (
             <a href={routes.profile()} className="mt-3 flex items-center gap-2 rounded-full px-3 py-1.5 text-sm text-text-muted hover:bg-surface-1 hover:text-text">
               <span className="grid size-6 place-items-center rounded-full bg-[var(--accent)] text-[11px] font-semibold text-accent-ink">{profileName[0]?.toUpperCase()}</span>
@@ -143,6 +147,9 @@ export function Shell({ children }: { children: ReactNode }) {
             >
               <Activity size={18} className={running.length ? 'animate-pulse text-[var(--accent)]' : ''} />
             </button>
+            <a href={routes.report()} className="grid size-9 place-items-center rounded-full text-text-muted hover:bg-surface-2 lg:hidden" aria-label="Esporta PDF">
+              <FileDown size={18} />
+            </a>
             <a href={routes.settings()} className="grid size-9 place-items-center rounded-full text-text-muted hover:bg-surface-2 lg:hidden" aria-label="Impostazioni">
               <Settings size={18} />
             </a>

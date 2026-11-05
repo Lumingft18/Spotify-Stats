@@ -37,7 +37,7 @@ export function StoryButton({
     <Button
       size={size}
       variant={variant}
-      className={className}
+      className={['no-print', className].filter(Boolean).join(' ')}
       onClick={() => void run()}
       disabled={busy}
       title={err ?? 'Esporta PNG 1080×1920 per le storie Instagram'}
