@@ -79,8 +79,17 @@ CREATE TABLE IF NOT EXISTS meta (
   lyrics       VARCHAR,
   cluster      INTEGER,
   x            DOUBLE,
-  y            DOUBLE
+  y            DOUBLE,
+  valence_audio  DOUBLE,
+  energy_audio   DOUBLE,
+  valence_lyrics DOUBLE,
+  mood_adj       VARCHAR
 );
+-- Sessions restored from an older schema: add the mood-adjustment columns in place.
+ALTER TABLE meta ADD COLUMN IF NOT EXISTS valence_audio DOUBLE;
+ALTER TABLE meta ADD COLUMN IF NOT EXISTS energy_audio DOUBLE;
+ALTER TABLE meta ADD COLUMN IF NOT EXISTS valence_lyrics DOUBLE;
+ALTER TABLE meta ADD COLUMN IF NOT EXISTS mood_adj VARCHAR;
 `;
 
 export const META_COLUMNS = [
@@ -98,6 +107,10 @@ export const META_COLUMNS = [
   'cluster',
   'x',
   'y',
+  'valence_audio',
+  'energy_audio',
+  'valence_lyrics',
+  'mood_adj',
 ] as const;
 export type MetaColumn = (typeof META_COLUMNS)[number];
 export type MetaRow = { uri: string } & Partial<Record<Exclude<MetaColumn, 'uri'>, string | number | null>>;

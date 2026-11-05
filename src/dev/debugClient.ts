@@ -53,6 +53,9 @@ async function handle(op: string, payload: Record<string, unknown> | null): Prom
       location.hash = hash;
       return { ok: true, url: location.href };
     }
+    case 'reload':
+      setTimeout(() => location.reload(), 100);
+      return { ok: true };
     default:
       throw new Error(`op sconosciuta: ${op}`);
   }

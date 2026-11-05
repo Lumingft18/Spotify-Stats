@@ -1,6 +1,7 @@
 import { Pause, Play, X, CheckCircle2, AlertCircle } from 'lucide-react';
 import { useApp } from '../lib/store';
 import { runStep, stopStep, STEPS, type StepId } from '../enrichment/jobs';
+import { MOOD_AI_JOB, moodAiAvailable, startMoodAi, stopMoodAi } from '../enrichment/moodAi';
 import { Button, cx, Meter } from './ui';
 import { fmtInt } from '../lib/format';
 
@@ -88,9 +89,29 @@ export function ActivityDrawer() {
         })}
         {extra.map((j) => (
           <div key={j.id} className="rounded-2xl border border-border bg-surface-2/60 p-4">
-            <div className="mb-2 font-medium">{j.label}</div>
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 font-medium">
+                {j.status === 'done' && <CheckCircle2 size={16} className="text-good" />}
+                {j.status === 'error' && <AlertCircle size={16} className="text-bad" />}
+                {j.label}
+              </div>
+              {j.id === MOOD_AI_JOB && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={j.status !== 'running' && !moodAiAvailable()}
+                  onClick={() => (j.status === 'running' ? stopMoodAi() : void startMoodAi({ limit: settings.autoMoodAiLimit }).catch(() => undefined))}
+                >
+                  {j.status === 'running' ? <Pause size={14} /> : <Play size={14} />}
+                  {j.status === 'running' ? 'Ferma' : 'Riprendi'}
+                </Button>
+              )}
+            </div>
             {j.total > 0 && <Meter value={j.done} max={j.total} />}
-            <div className="mt-1.5 text-xs text-text-faint">{j.detail ?? j.status}</div>
+            <div className="mt-1.5 text-xs text-text-faint">
+              {j.total > 0 && <span className="num">{fmtInt(j.done)} / {fmtInt(j.total)} · </span>}
+              {j.detail ?? { running: 'in corso', paused: 'fermato', done: 'completato', error: 'errore' }[j.status]}
+            </div>
           </div>
         ))}
       </aside>

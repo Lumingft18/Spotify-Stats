@@ -109,7 +109,9 @@ export async function runMoodV2(opts: {
 }): Promise<MoodRunReport> {
   const model = getApp().settings.llmModelBulk;
   const known = await query<Item>(
-    `SELECT t.uri, t.track, t.artist, m.tags, m.lyrics, m.valence, m.energy FROM tracks t JOIN meta m USING (uri)
+    // Anchors/hold-out use the raw measured audio values, not the lyric-fused ones.
+    `SELECT t.uri, t.track, t.artist, m.tags, m.lyrics, coalesce(m.valence_audio, m.valence) AS valence, coalesce(m.energy_audio, m.energy) AS energy
+     FROM tracks t JOIN meta m USING (uri)
      WHERE m.mood_source = 'reccobeats' AND m.valence IS NOT NULL AND m.energy IS NOT NULL ORDER BY t.minutes DESC LIMIT 400`,
   );
   // Hold-out: 12 known tracks are predicted blind to measure accuracy.
@@ -201,4 +203,82 @@ export async function runMoodV2(opts: {
   await idb.set('mood_report', report);
   getApp().bump();
   return report;
+}
+
+// ---------- Lyrics-only valence (fused with audio valence in data/moodAdjust.ts) ----------
+
+const LYRICS_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['results'],
+  properties: {
+    results: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['id', 'valence'],
+        properties: { id: { type: 'string' }, valence: { type: 'number', minimum: 0, maximum: 1 } },
+      },
+    },
+  },
+};
+
+const LYRICS_SYSTEM = `Valuti SOLO il TESTO di ogni brano (non la musica, non la fama del brano).
+valence = positività emotiva del testo da 0 a 1: 0 = disperato, triste, rabbioso, cupo; 0.5 = neutro, ambivalente o descrittivo; 1 = gioioso, amorevole, euforico.
+Testi agrodolci o nostalgici stanno tra 0.3 e 0.45. Se il testo è troppo breve o incomprensibile, rispondi 0.5.
+Rispondi solo con il JSON richiesto, un elemento per ogni id.`;
+
+export async function lyricsValenceCandidates(limit: number) {
+  return query<{ uri: string; track: string; artist: string; lyrics: string }>(
+    `SELECT t.uri, t.track, t.artist, m.lyrics FROM tracks t JOIN meta m USING (uri)
+     WHERE m.valence_audio IS NOT NULL AND m.valence_lyrics IS NULL
+       AND m.lyrics IS NOT NULL AND length(m.lyrics) > 80 AND m.lyrics <> '[strumentale]' AND t.plays > 0
+     ORDER BY t.minutes DESC LIMIT ${Math.floor(limit)}`,
+  );
+}
+
+/** Scores lyric valence for tracks that already have measured audio features. Returns how many were scored. */
+export async function runLyricsValence(opts: { limit: number; signal: AbortSignal; onProgress: (done: number, total: number) => void }): Promise<number> {
+  const model = getApp().settings.llmModelBulk;
+  const targets = await lyricsValenceCandidates(opts.limit);
+  const B = 15;
+  const batches: (typeof targets)[] = [];
+  for (let i = 0; i < targets.length; i += B) batches.push(targets.slice(i, i + B));
+  let done = 0;
+  let scored = 0;
+  let cursor = 0;
+  opts.onProgress(0, targets.length);
+  const worker = async () => {
+    while (cursor < batches.length && !opts.signal.aborted) {
+      const batch = batches[cursor++];
+      const ids = new Map(batch.map((t, i) => [`t${i}`, t]));
+      const user = batch.map((t, i) => `[t${i}] "${t.track}" — ${t.artist}\n${clip(t.lyrics, 700)}`).join('\n\n');
+      try {
+        const r = await structured<{ results: Array<{ id: string; valence: number }> }>({
+          model,
+          system: LYRICS_SYSTEM,
+          user,
+          schemaName: 'lyrics_valence',
+          schema: LYRICS_SCHEMA,
+          temperature: 0.2,
+          signal: opts.signal,
+        });
+        const rows: MetaRow[] = [];
+        for (const x of r.results ?? []) {
+          const t = ids.get(x.id);
+          if (t && Number.isFinite(Number(x.valence))) rows.push({ uri: t.uri, valence_lyrics: Math.min(1, Math.max(0, Number(x.valence))) });
+        }
+        if (rows.length) await upsertMeta(rows);
+        scored += rows.length;
+      } catch (e) {
+        if (opts.signal.aborted) return;
+        console.warn('lyrics valence batch failed', e);
+      }
+      done += batch.length;
+      opts.onProgress(done, targets.length);
+    }
+  };
+  await Promise.all([worker(), worker(), worker()]);
+  return scored;
 }

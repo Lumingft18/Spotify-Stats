@@ -10,6 +10,10 @@ export interface Settings {
   llmModelBulk: string;
   llmModelAgent: string;
   connections: Record<ConnectionId, boolean>;
+  /** Start the AI mood estimate automatically after enrichment when an OpenRouter key is set. */
+  autoMoodAi: boolean;
+  /** Max tracks per automatic run (most-listened first). */
+  autoMoodAiLimit: number;
 }
 
 const SETTINGS_KEY = 'ss2.settings';
@@ -23,6 +27,8 @@ const defaultSettings: Settings = {
   lastfmKey: '',
   llmModelBulk: 'anthropic/claude-haiku-5.5',
   llmModelAgent: 'anthropic/claude-sonnet-5.5',
+  autoMoodAi: true,
+  autoMoodAiLimit: 500,
   connections: {
     covers: true,
     audiofeatures: true,

@@ -8,7 +8,7 @@ import { navigate, routes } from '../../lib/router';
 import { idb } from '../../lib/idb';
 import { buildIndex, computeLayout, DEFAULT_EMBED_MODEL, EMBED_MODELS, loadIndex, semanticSearch } from '../../ml/embeddings';
 import { runStep } from '../../enrichment/jobs';
-import { runMoodV2, moodCandidates, type MoodRunReport } from '../../llm/mood';
+import { moodCandidates, type MoodRunReport } from '../../llm/mood';
 import { nameClustersWithLLM } from '../../llm/narrate';
 import { useLlmAvailable, estimateTokens } from '../../llm/client';
 import { Badge, Button, Card, ErrorNote, Meter, PageHeader, Section, Segmented, Skeleton, Spinner } from '../../components/ui';
@@ -17,6 +17,7 @@ import { Galaxy, type GalaxyPoint } from '../../components/charts/Galaxy';
 import { MoodPlane } from '../../components/charts/common';
 import { PlotChart, Plot } from '../../components/charts/PlotChart';
 import { MoodTimeline } from './MoodTimeline';
+import { MOOD_AI_JOB, startMoodAi, stopMoodAi } from '../../enrichment/moodAi';
 import { StoryButton } from '../../components/StoryButton';
 import { periodLabel } from '../../lib/storyCard';
 
@@ -36,18 +37,20 @@ interface MapRow {
 
 function MoodStatus() {
   const ai = useLlmAvailable();
-  const cov = useSqlOne<{ with_mood: number; total: number; reccobeats: number; llm: number }>(`
+  const cov = useSqlOne<{ with_mood: number; total: number; reccobeats: number; llm: number; live: number; lyrics: number }>(`
     SELECT sum(minutes) FILTER (WHERE p.valence IS NOT NULL) AS with_mood, sum(minutes) AS total,
            count(DISTINCT p.uri) FILTER (WHERE m.mood_source = 'reccobeats') AS reccobeats,
-           count(DISTINCT p.uri) FILTER (WHERE m.mood_source = 'llm') AS llm
+           count(DISTINCT p.uri) FILTER (WHERE m.mood_source = 'llm') AS llm,
+           count(DISTINCT p.uri) FILTER (WHERE m.mood_adj LIKE 'live:studio%') AS live,
+           count(DISTINCT p.uri) FILTER (WHERE m.valence_lyrics IS NOT NULL) AS lyrics
     FROM p LEFT JOIN meta m USING (uri)`);
   const report = useAsync(() => idb.get<MoodRunReport>('mood_report'));
   const job = useApp((s) => s.jobs.audiofeatures);
-  const setJob = useApp((s) => s.setJob);
-  const [running, setRunning] = useState(false);
+  const aiJob = useApp((s) => s.jobs[MOOD_AI_JOB]);
+  const autoMood = useApp((s) => s.settings.autoMoodAi);
+  const running = aiJob?.status === 'running';
   const [err, setErr] = useState<string | null>(null);
   const [limit, setLimit] = useState(400);
-  const ctrl = useRef<AbortController | null>(null);
   const candidates = useAsync(() => moodCandidates(5000));
   const c = cov.row;
   const pct = c && c.total ? c.with_mood / c.total : 0;
@@ -56,20 +59,10 @@ function MoodStatus() {
 
   const runLlm = async () => {
     setErr(null);
-    setRunning(true);
-    ctrl.current = new AbortController();
     try {
-      await runMoodV2({
-        limit,
-        samples: 2,
-        signal: ctrl.current.signal,
-        onProgress: (done, total) => setJob({ id: 'mood_llm', label: 'Mood AI (testi + tag)', done, total, status: 'running' }),
-      });
-      setJob({ id: 'mood_llm', label: 'Mood AI (testi + tag)', done: 1, total: 1, status: 'done' });
+      await startMoodAi({ limit });
     } catch (e) {
-      if (!ctrl.current.signal.aborted) setErr(e instanceof Error ? e.message : String(e));
-    } finally {
-      setRunning(false);
+      if (useApp.getState().jobs[MOOD_AI_JOB]?.status !== 'paused') setErr(e instanceof Error ? e.message : String(e));
     }
   };
 
@@ -82,6 +75,11 @@ function MoodStatus() {
           <div className="text-xs text-text-muted">
             {fmtInt(c?.reccobeats ?? 0)} brani misurati · {fmtInt(c?.llm ?? 0)} stimati con AI
           </div>
+          {!!(c?.live || c?.lyrics) && (
+            <div className="text-xs text-text-faint" title="Live: valori presi dalla versione in studio. Testo: positività = 65% audio + 35% testo (Delbouys et al. 2018).">
+              {fmtInt(c?.live ?? 0)} live corretti con la versione in studio · {fmtInt(c?.lyrics ?? 0)} con positività unita al testo
+            </div>
+          )}
         </div>
         <div className="flex flex-wrap gap-2">
           <Button size="sm" onClick={() => void runStep('audiofeatures')} disabled={job?.status === 'running'}>
@@ -115,8 +113,8 @@ function MoodStatus() {
           </label>
           <span className="num text-xs text-text-faint">≈ {fmtInt(estTok)} token</span>
           {running ? (
-            <Button size="sm" variant="danger" onClick={() => ctrl.current?.abort()}>
-              <X size={14} /> Ferma
+            <Button size="sm" variant="danger" onClick={stopMoodAi}>
+              <X size={14} /> Ferma{aiJob && aiJob.total > 0 ? ` (${fmtInt(aiJob.done)}/${fmtInt(aiJob.total)})` : ''}
             </Button>
           ) : (
             <Button size="sm" variant="primary" disabled={!ai || !nCand} onClick={() => void runLlm()}>
@@ -126,6 +124,11 @@ function MoodStatus() {
           {!ai && (
             <a href={routes.settings()} className="text-xs text-[var(--accent)]">
               Serve una chiave OpenRouter
+            </a>
+          )}
+          {ai && (
+            <a href={routes.settings()} className="text-xs text-text-faint hover:text-text">
+              Avvio automatico: {autoMood ? 'attivo' : 'spento'}
             </a>
           )}
         </div>

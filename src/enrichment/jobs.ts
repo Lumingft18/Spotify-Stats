@@ -1,9 +1,11 @@
-import { query, upsertMeta } from '../data/db';
+import { persistMeta, query, upsertMeta } from '../data/db';
 import type { MetaRow } from '../data/schema';
 import { idb } from '../lib/idb';
 import { getApp, type ConnectionId } from '../lib/store';
 import { sleep } from './net';
 import { cacheCatalog } from '../lib/catalogCache';
+import { autoMoodAi, stopMoodAi } from './moodAi';
+import { applyMoodAdjustments } from '../data/moodAdjust';
 import { fetchArtistTagsMB, fetchAudioFeatures, fetchCover, fetchLyrics, fetchTags, type TrackRef } from './providers';
 
 export type StepId = 'covers' | 'audiofeatures' | 'lyrics' | 'tags';
@@ -133,6 +135,7 @@ export function stopStep(step: StepId) {
 
 export function stopAll() {
   for (const c of controllers.values()) c.abort();
+  stopMoodAi();
 }
 
 export async function pendingCount(step: StepId): Promise<number> {
@@ -145,8 +148,19 @@ export async function pendingCount(step: StepId): Promise<number> {
   return rows.filter((r) => !tried.has(r.uri)).length;
 }
 
-/** Runs one enrichment step over all pending tracks (ordered by listening time). Resumable. */
-export async function runStep(step: StepId, limit = Infinity): Promise<void> {
+const inFlight = new Map<StepId, Promise<void>>();
+
+/** Runs one enrichment step over all pending tracks (ordered by listening time). Resumable.
+ *  If the step is already running, returns the in-flight run so callers can wait for it to finish. */
+export function runStep(step: StepId, limit = Infinity): Promise<void> {
+  const cur = inFlight.get(step);
+  if (cur) return cur;
+  const p = runStepNow(step, limit).finally(() => inFlight.delete(step));
+  inFlight.set(step, p);
+  return p;
+}
+
+async function runStepNow(step: StepId, limit: number): Promise<void> {
   if (controllers.has(step)) return;
   const app = getApp();
   const d = STEPS[step];
@@ -163,13 +177,18 @@ export async function runStep(step: StepId, limit = Infinity): Promise<void> {
        WHERE m.${d.column} IS NULL AND t.plays > 0 ${d.filter ? 'AND ' + d.filter : ''}
        ORDER BY t.minutes DESC`,
     );
-    const items = rows.filter((r) => !tried.has(r.uri)).slice(0, limit);
-    const total = items.length;
-    let done = 0;
+    const pendingAll = rows.filter((r) => !tried.has(r.uri));
+    const items = pendingAll.slice(0, limit);
+    // Cumulative progress across reloads: a refresh resumes the count instead of restarting from 0.
+    const progressKey = `progress:${step}`;
+    const base = pendingAll.length ? ((await idb.get<number>(progressKey)) ?? 0) : 0;
+    const total = base + pendingAll.length;
+    let done = base;
     const job = (status: 'running' | 'done' | 'paused' | 'error', detail?: string) =>
       app.setJob({ id: step, label: d.label, done, total, status, detail });
     job('running');
-    if (!total) {
+    if (!items.length) {
+      await idb.del(progressKey);
       job('done');
       return;
     }
@@ -181,17 +200,29 @@ export async function runStep(step: StepId, limit = Infinity): Promise<void> {
     let lastFlush = Date.now();
     let fails = 0;
 
-    const flush = async () => {
+    let lastSave = Date.now();
+    let unsaved = false;
+    const flush = async (final = false) => {
       const rowsToWrite = pending;
       pending = [];
       lastFlush = Date.now();
       if (rowsToWrite.length) {
-        await upsertMeta(rowsToWrite);
+        await upsertMeta(rowsToWrite, false);
+        unsaved = true;
         // Public catalog data is also kept in a shared local cache (survives other exports / data wipes).
         if (step !== 'tags' || !getApp().settings.lastfmKey) void cacheCatalog(rowsToWrite).catch(() => undefined);
         scheduleBump();
       }
-      await idb.set(`tried:${step}`, Array.from(tried));
+      // Save results BEFORE the "tried" list and progress, so a reload never skips items whose results were lost.
+      if (final || Date.now() - lastSave > 10_000) {
+        if (unsaved) await persistMeta();
+        unsaved = false;
+        lastSave = Date.now();
+        await idb.setMany([
+          [`tried:${step}`, Array.from(tried)],
+          [progressKey, done],
+        ]);
+      }
     };
 
     const worker = async () => {
@@ -226,7 +257,9 @@ export async function runStep(step: StepId, limit = Infinity): Promise<void> {
     };
 
     await Promise.all(Array.from({ length: d.concurrency }, worker));
-    await flush();
+    await flush(true);
+    if (!ctrl.signal.aborted && items.length === pendingAll.length) await idb.del(progressKey);
+    if (step === 'audiofeatures') await applyMoodAdjustments();
     job(ctrl.signal.aborted ? 'paused' : 'done');
   } catch (e) {
     app.setJob({ id: step, label: d.label, done: 0, total: 0, status: 'error', detail: e instanceof Error ? e.message : String(e) });
@@ -250,13 +283,21 @@ export function runAllEnabled() {
 
 function runAllEnabledNow() {
   const s = getApp().settings;
+  const runs: Array<Promise<void>> = [];
   if (s.connections.covers) void runStep('covers');
-  if (s.connections.audiofeatures) void runStep('audiofeatures');
+  if (s.connections.audiofeatures) {
+    const af = runStep('audiofeatures');
+    runs.push(af);
+    // AI mood can start as soon as measured anchors exist, on the lyrics/tags already stored…
+    void af.then(autoMoodAi);
+  }
   // Most-listened first; ~10–15 min each at the providers' polite rates. "Avvia" in Attività continues past these caps.
-  if (s.connections.lyrics) void runStep('lyrics', 1500);
-  if (s.connections.lastfm) void runStep('tags', s.lastfmKey ? 3000 : 600);
+  if (s.connections.lyrics) runs.push(runStep('lyrics', 1500));
+  if (s.connections.lastfm) runs.push(runStep('tags', s.lastfmKey ? 3000 : 600));
+  // …and runs again once this session's lyrics/tags are in, to cover the new candidates.
+  void Promise.all(runs).then(autoMoodAi);
 }
 
 export async function resetTried() {
-  await Promise.all((Object.keys(STEPS) as StepId[]).map((s) => idb.del(`tried:${s}`)));
+  await Promise.all((Object.keys(STEPS) as StepId[]).flatMap((s) => [idb.del(`tried:${s}`), idb.del(`progress:${s}`)]));
 }

@@ -8,6 +8,7 @@
 //   curl -s -X POST localhost:5173/__debug/sql -d '{"sql":"SELECT count(*) FROM meta"}'
 //   curl -s localhost:5173/__debug/idb            (list keys)   ?key=mood_report  (read one, truncated)
 //   curl -s -X POST localhost:5173/__debug/navigate -d '{"hash":"#/mood"}'
+//   curl -s localhost:5173/__debug/reload         (full page reload)
 import type { IncomingMessage } from 'node:http'
 import type { Plugin, ViteDevServer } from 'vite'
 
@@ -77,10 +78,12 @@ export function debugBridge(): Plugin {
               return send(200, await ask('sql', { sql: body.sql ?? url.searchParams.get('q'), params: body.params ?? [] }, 120_000))
             case '/idb':
               return send(200, await ask('idb', { key: url.searchParams.get('key'), store: url.searchParams.get('store') ?? 'kv' }))
+            case '/reload':
+              return send(200, await ask('reload', null, 5_000))
             case '/navigate':
               return send(200, await ask('navigate', { hash: body.hash ?? url.searchParams.get('hash') }))
             default:
-              return send(404, { error: 'route sconosciuta', routes: ['/ping', '/state', '/logs', '/sql', '/idb', '/navigate'] })
+              return send(404, { error: 'route sconosciuta', routes: ['/ping', '/state', '/logs', '/sql', '/idb', '/navigate', '/reload'] })
           }
         } catch (e) {
           send(500, { error: e instanceof Error ? e.message : String(e) })

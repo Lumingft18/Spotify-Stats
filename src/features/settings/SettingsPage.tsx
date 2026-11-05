@@ -8,6 +8,7 @@ import { query, loadPlays, wipeAll } from '../../data/db';
 import { afterDataLoaded, importFiles } from '../../data/lifecycle';
 import { emptyColumns, makeLocalizer, PLAY_COLUMNS, type PlayColumns } from '../../data/normalize';
 import { resetTried, runAllEnabled, stopAll } from '../../enrichment/jobs';
+import { autoMoodAi, MOOD_AI_JOB, stopMoodAi } from '../../enrichment/moodAi';
 import { clearIndexCache } from '../../ml/embeddings';
 import { Button, Card, ErrorNote, PageHeader, Section, Spinner, cx } from '../../components/ui';
 
@@ -198,6 +199,57 @@ function KeysForm() {
   );
 }
 
+function MoodAiSettings() {
+  const settings = useApp((s) => s.settings);
+  const update = useApp((s) => s.updateSettings);
+  const job = useApp((s) => s.jobs[MOOD_AI_JOB]);
+  const hasKey = settings.connections.llm && !!settings.openrouterKey;
+  const running = job?.status === 'running';
+  return (
+    <Card className="flex flex-col gap-4">
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0">
+          <div className="font-medium">Avvia da solo quando c’è una chiave OpenRouter</div>
+          <div className="text-xs text-text-faint">
+            Dopo copertine, audio features, testi e tag, stima valence ed energia dei brani che ne sono privi (dai più ascoltati), usando testo e generi.
+            Invia a OpenRouter titolo, artista, tag e un estratto del testo. {hasKey ? '' : 'Ora non c’è una chiave: non parte.'}
+          </div>
+        </div>
+        <Toggle
+          label="Avvio automatico mood AI"
+          on={settings.autoMoodAi}
+          onChange={(v) => {
+            update({ autoMoodAi: v });
+            if (v) setTimeout(() => void autoMoodAi(), 50);
+            else stopMoodAi();
+          }}
+        />
+      </div>
+      <div className="flex flex-wrap items-center gap-3">
+        <label className="flex items-center gap-2 text-sm text-text-muted">
+          Brani per avvio
+          <input
+            type="number"
+            min={20}
+            max={5000}
+            step={20}
+            value={settings.autoMoodAiLimit}
+            onChange={(e) => update({ autoMoodAiLimit: Math.max(20, Math.min(5000, Number(e.target.value) || 20)) })}
+            className="h-9 w-24 rounded-lg border border-border bg-surface-1 px-2 text-sm text-text"
+          />
+        </label>
+        {running ? (
+          <Button size="sm" variant="danger" onClick={stopMoodAi}>
+            Ferma ({job.done}/{job.total})
+          </Button>
+        ) : (
+          job && <span className="text-xs text-text-faint">Ultimo avvio: {{ done: 'completato', paused: 'fermato', error: `errore${job.detail ? ` — ${job.detail}` : ''}`, running: '' }[job.status]}</span>
+        )}
+      </div>
+    </Card>
+  );
+}
+
 export default function SettingsPage() {
   const settings = useApp((s) => s.settings);
   const update = useApp((s) => s.updateSettings);
@@ -242,6 +294,10 @@ export default function SettingsPage() {
 
       <Section kicker="Chiavi" title="Le tue chiavi API (restano in questo browser)">
         <KeysForm />
+      </Section>
+
+      <Section kicker="Mood AI" title="Stima automatica del mood con l’AI">
+        <MoodAiSettings />
       </Section>
 
       <Section kicker="Fuso orario" title="Per ore e giorni locali">

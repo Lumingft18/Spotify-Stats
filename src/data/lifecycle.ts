@@ -6,6 +6,7 @@ import { getApp } from '../lib/store';
 import { idb } from '../lib/idb';
 import { readCatalog } from '../lib/catalogCache';
 import { runAllEnabled } from '../enrichment/jobs';
+import { applyMoodAdjustments } from './moodAdjust';
 
 /** Re-applies cached public metadata (covers, audio features) to the loaded tracks — no network needed. */
 async function hydrateFromCatalog() {
@@ -29,6 +30,7 @@ export async function afterDataLoaded() {
   ]);
   getApp().set({ bounds: b[0] ?? null, status: 'ready', range: { from: null, to: null }, profile: profile ?? null, dataset: dataset ?? null });
   await hydrateFromCatalog().catch((e) => console.warn('catalog cache', e));
+  await applyMoodAdjustments().catch((e) => console.warn('mood adjust', e));
   getApp().bump();
   setTimeout(runAllEnabled, 800);
 }

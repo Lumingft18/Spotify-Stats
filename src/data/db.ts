@@ -147,7 +147,7 @@ export async function setFilter(from: string | null, to: string | null) {
 
 // ---------- meta (enrichment) ----------
 
-const NUMERIC_META = new Set(['valence', 'energy', 'danceability', 'tempo', 'acousticness', 'mood_conf', 'x', 'y']);
+const NUMERIC_META = new Set(['valence', 'energy', 'danceability', 'tempo', 'acousticness', 'mood_conf', 'x', 'y', 'valence_audio', 'energy_audio', 'valence_lyrics']);
 
 let metaPersistTimer: ReturnType<typeof setTimeout> | null = null;
 let tmpSeq = 0;
