@@ -5,6 +5,7 @@ import type { MetaRow } from '../data/schema';
 import { idb } from '../lib/idb';
 import { getApp } from '../lib/store';
 import { structured } from './client';
+import { MOOD_CENTER } from '../lib/mood';
 
 interface Item {
   uri: string;
@@ -49,7 +50,7 @@ const SYSTEM = `Sei un esperto di Music Emotion Recognition. Per ogni brano stim
 - valence: positività emotiva percepita (0 = cupo/triste/rabbioso, 1 = gioioso/euforico/sereno). Usa soprattutto il TESTO e il tono.
 - energy: intensità/arousal percepita (0 = calmo, acustico, lento; 1 = intenso, veloce, forte). Usa soprattutto GENERI/TAG e lo stile dell'artista.
 Calibra le stime sui BRANI DI RIFERIMENTO forniti: i loro valori sono misurati sull'audio e definiscono la scala.
-Se le informazioni sono scarse, resta vicino a 0.5 invece di inventare. "evidence" = max 12 parole sul perché.
+Valori tipici della scala: valence ≈ 0.50, energy ≈ 0.65 (la musica pubblicata è in media piuttosto energica). Se le informazioni sono scarse, resta vicino a questi valori tipici invece di inventare. "evidence" = max 12 parole sul perché.
 Rispondi solo con il JSON richiesto, con un elemento per ogni id ricevuto.`;
 
 const clip = (s: string | null, n: number) => (s ? s.replace(/\s+/g, ' ').slice(0, n) : '');
@@ -64,7 +65,7 @@ function describe(i: Item, withLyrics = 380) {
 
 function pickAnchors(pool: Item[], n: number): Item[] {
   // Stratify on the 4 quadrants, prefer anchors with textual signal.
-  const q = (i: Item) => (i.valence! > 0.5 ? 1 : 0) + (i.energy! > 0.5 ? 2 : 0);
+  const q = (i: Item) => (i.valence! > MOOD_CENTER.valence ? 1 : 0) + (i.energy! > MOOD_CENTER.energy ? 2 : 0);
   const buckets: Item[][] = [[], [], [], []];
   for (const i of [...pool].sort((a, b) => Number(!!b.lyrics || !!b.tags) - Number(!!a.lyrics || !!a.tags))) buckets[q(i)].push(i);
   const out: Item[] = [];

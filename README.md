@@ -39,3 +39,16 @@ npm run build
 ```
 
 Piano e motivazioni: [PIANO_EVOLUZIONE_2026.md](PIANO_EVOLUZIONE_2026.md).
+
+## Debug bridge (solo `npm run dev`)
+
+Il dev server espone `/__debug/*`: la scheda aperta dell'app risponde via websocket HMR, così strumenti locali possono ispezionarla. Non esiste nella build di produzione; le chiavi API sono oscurate; SQL in sola lettura.
+
+```sh
+curl -s localhost:5173/__debug/ping
+curl -s localhost:5173/__debug/state          # store (senza chiavi), job, rete
+curl -s localhost:5173/__debug/logs           # console.error/warn + eccezioni
+curl -s localhost:5173/__debug/idb            # chiavi IndexedDB (?key=… per leggerne una)
+curl -s -X POST localhost:5173/__debug/sql -d '{"sql":"SELECT mood_source, count(*) FROM meta GROUP BY 1"}'
+curl -s -X POST localhost:5173/__debug/navigate -d '{"hash":"#/mood"}'
+```

@@ -3,7 +3,7 @@ import { Orbit, Search, Sparkles, Wand2, RefreshCw, X } from 'lucide-react';
 import { useSql, useSqlOne, useAsync } from '../../data/useSql';
 import { useApp } from '../../lib/store';
 import { fmtHours, fmtInt, fmtPct, fmtMonth } from '../../lib/format';
-import { getMood, MOODS, MOOD_HEX, MOOD_SQL, moodLabel } from '../../lib/mood';
+import { getMood, MOODS, MOOD_CENTER, MOOD_HEX, MOOD_SQL, moodLabel } from '../../lib/mood';
 import { navigate, routes } from '../../lib/router';
 import { idb } from '../../lib/idb';
 import { buildIndex, computeLayout, DEFAULT_EMBED_MODEL, EMBED_MODELS, loadIndex, semanticSearch } from '../../ml/embeddings';
@@ -528,7 +528,8 @@ export default function MoodPage() {
         y: { domain: [0.2, 0.85], grid: true, label: null },
         color: { domain: ['Positività', 'Energia'], range: [MOOD_HEX.euforico, MOOD_HEX.malinconico], legend: true },
         marks: [
-          Plot.ruleY([0.5], { stroke: 'var(--color-border-strong)', strokeDasharray: '3,3' }),
+          Plot.ruleY([MOOD_CENTER.valence], { stroke: MOOD_HEX.euforico, strokeOpacity: 0.5, strokeDasharray: '3,3' }),
+          Plot.ruleY([MOOD_CENTER.energy], { stroke: MOOD_HEX.malinconico, strokeOpacity: 0.5, strokeDasharray: '3,3' }),
           Plot.lineY(rows, { x: 'date', y: 'v', stroke: 's', strokeWidth: 2, curve: 'monotone-x' }),
           Plot.tip(rows, Plot.pointerX({ x: 'date', y: 'v', stroke: 's', title: (d: { date: Date; v: number; s: string }) => `${fmtMonth(d.date.toISOString().slice(0, 7))}\n${d.s}: ${d.v.toFixed(2)}` })),
         ],

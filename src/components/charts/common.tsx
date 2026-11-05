@@ -1,6 +1,7 @@
 import { useCallback } from 'react';
 import { PlotChart, Plot } from './PlotChart';
 import { DOW, fmt1, fmtHours, fmtMonth } from '../../lib/format';
+import { MOOD_CENTER } from '../../lib/mood';
 
 /** Monthly listening bars. rows: { ym: 'YYYY-MM', minutes } */
 export function MonthlyBars({ rows, height = 180, label = 'Ascolto per mese' }: { rows: Array<{ ym: string; minutes: number }>; height?: number; label?: string }) {
@@ -85,8 +86,8 @@ export function MoodPlane({
       y: { domain: [0, 1], label: '↑ energia', grid: false },
       r: { range: [2, 9] },
       marks: [
-        Plot.ruleX([0.5], { stroke: 'var(--color-border-strong)', strokeDasharray: '3,3' }),
-        Plot.ruleY([0.5], { stroke: 'var(--color-border-strong)', strokeDasharray: '3,3' }),
+        Plot.ruleX([MOOD_CENTER.valence], { stroke: 'var(--color-border-strong)', strokeDasharray: '3,3' }),
+        Plot.ruleY([MOOD_CENTER.energy], { stroke: 'var(--color-border-strong)', strokeDasharray: '3,3' }),
         Plot.text(
           [
             { x: 0.97, y: 0.97, t: 'Euforico', a: 'end' },

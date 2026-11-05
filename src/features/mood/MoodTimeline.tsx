@@ -3,7 +3,7 @@ import { useSql } from '../../data/useSql';
 import { PlotChart, Plot } from '../../components/charts/PlotChart';
 import { Card, Empty, Segmented, Skeleton } from '../../components/ui';
 import { DOW, fmtDate, fmtHours, fmtMonth, fmtPct } from '../../lib/format';
-import { MOODS, MOOD_HEX, MOOD_SQL, moodLabel, type Mood } from '../../lib/mood';
+import { MOODS, MOOD_CENTER, MOOD_HEX, MOOD_SQL, moodLabel, type Mood } from '../../lib/mood';
 import { navigate, routes } from '../../lib/router';
 
 type Grain = 'day' | 'week' | 'month';
@@ -63,7 +63,7 @@ function Trend({ grain, relative }: { grain: Grain; relative: boolean }) {
     FROM p GROUP BY 1 HAVING sum(minutes) FILTER (WHERE valence IS NOT NULL) >= ${grain === 'day' ? 10 : 30} ORDER BY 1`);
 
   const baseline = useSql<{ v: number }>(`SELECT sum(valence * minutes) / sum(minutes) AS v FROM p WHERE valence IS NOT NULL`);
-  const ref = relative ? baseline.data?.[0]?.v ?? 0.5 : 0.5;
+  const ref = relative ? baseline.data?.[0]?.v ?? MOOD_CENTER.valence : MOOD_CENTER.valence;
   const rows = useMemo(
     () =>
       (stacked.data ?? []).map((r) => {
@@ -317,7 +317,7 @@ function Moments({ relative }: { relative: boolean }) {
     FROM p WHERE valence IS NOT NULL GROUP BY 1 ORDER BY 2`);
   const data = useMemo(() => rows.data ?? [], [rows.data]);
   const totalMin = data.reduce((a, d) => a + d.minutes, 0) || 1;
-  const mean = relative ? data.reduce((a, d) => a + d.valence * d.minutes, 0) / totalMin : 0.5;
+  const mean = relative ? data.reduce((a, d) => a + d.valence * d.minutes, 0) / totalMin : MOOD_CENTER.valence;
   const vmin = Math.min(mean - 0.01, ...data.map((d) => d.valence));
   const vmax = Math.max(mean + 0.01, ...data.map((d) => d.valence));
   const verdict = useCallback(

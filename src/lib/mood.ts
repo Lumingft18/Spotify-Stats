@@ -20,28 +20,43 @@ export const MOOD_HEX: Record<Mood, string> = {
   sconosciuto: '#4b5160',
 };
 
-export function getMood(valence: number | null | undefined, energy: number | null | undefined, neutral = 0.05): Mood {
+/**
+ * Quadrant centre on the Spotify-style feature scale (catalog norms, not 0.5/0.5):
+ * valence is ~symmetric around 0.50, while energy is skewed high in released music
+ * (median 0.65–0.72 on 32k–114k-track Spotify datasets). Splitting energy at 0.5 put
+ * ~75% of a typical pop/rock library in the high-arousal half and inflated "Teso".
+ * Neutral box ≈ ±0.3 SD per axis (sd valence ≈ 0.23, energy ≈ 0.18), as in 5-class
+ * valence/arousal setups (Panda et al. 2021; Çano & Morisio, MoodyLyrics).
+ */
+export const MOOD_CENTER = { valence: 0.5, energy: 0.65 } as const;
+export const MOOD_NEUTRAL = { valence: 0.07, energy: 0.055 } as const;
+
+export function getMood(valence: number | null | undefined, energy: number | null | undefined): Mood {
   if (valence == null || !Number.isFinite(valence)) return 'sconosciuto';
   const v = Math.min(1, Math.max(0, valence));
+  const dv = v - MOOD_CENTER.valence;
   if (energy == null || !Number.isFinite(energy)) {
-    if (v >= 0.5 + neutral) return 'sereno';
-    if (v <= 0.5 - neutral) return 'malinconico';
-    return 'neutrale';
+    if (Math.abs(dv) <= MOOD_NEUTRAL.valence) return 'neutrale';
+    return dv > 0 ? 'sereno' : 'malinconico';
   }
-  const e = Math.min(1, Math.max(0, energy));
-  if (Math.abs(v - 0.5) <= neutral && Math.abs(e - 0.5) <= neutral) return 'neutrale';
-  if (v > 0.5) return e > 0.5 ? 'euforico' : 'sereno';
-  return e > 0.5 ? 'arrabbiato' : 'malinconico';
+  const de = Math.min(1, Math.max(0, energy)) - MOOD_CENTER.energy;
+  if (Math.abs(dv) <= MOOD_NEUTRAL.valence && Math.abs(de) <= MOOD_NEUTRAL.energy) return 'neutrale';
+  if (dv > 0) return de > 0 ? 'euforico' : 'sereno';
+  return de > 0 ? 'arrabbiato' : 'malinconico';
 }
 
 /** SQL equivalent (keep in sync with getMood). */
-export const MOOD_SQL = (v = 'valence', e = 'energy') => `CASE
+export const MOOD_SQL = (v = 'valence', e = 'energy') => {
+  const { valence: cv, energy: ce } = MOOD_CENTER;
+  const { valence: nv, energy: ne } = MOOD_NEUTRAL;
+  return `CASE
   WHEN ${v} IS NULL THEN 'sconosciuto'
-  WHEN abs(${v} - 0.5) <= 0.05 AND abs(coalesce(${e}, 0.5) - 0.5) <= 0.05 THEN 'neutrale'
-  WHEN ${e} IS NULL THEN CASE WHEN ${v} > 0.5 THEN 'sereno' ELSE 'malinconico' END
-  WHEN ${v} > 0.5 AND ${e} > 0.5 THEN 'euforico'
-  WHEN ${v} > 0.5 THEN 'sereno'
-  WHEN ${e} > 0.5 THEN 'arrabbiato'
+  WHEN ${e} IS NULL THEN CASE WHEN abs(least(1, greatest(0, ${v})) - ${cv}) <= ${nv} THEN 'neutrale' WHEN least(1, greatest(0, ${v})) > ${cv} THEN 'sereno' ELSE 'malinconico' END
+  WHEN abs(least(1, greatest(0, ${v})) - ${cv}) <= ${nv} AND abs(least(1, greatest(0, ${e})) - ${ce}) <= ${ne} THEN 'neutrale'
+  WHEN least(1, greatest(0, ${v})) > ${cv} AND least(1, greatest(0, ${e})) > ${ce} THEN 'euforico'
+  WHEN least(1, greatest(0, ${v})) > ${cv} THEN 'sereno'
+  WHEN least(1, greatest(0, ${e})) > ${ce} THEN 'arrabbiato'
   ELSE 'malinconico' END`;
+};
 
 export const moodLabel = (m: Mood) => MOODS.find((x) => x.id === m)?.label ?? 'Sconosciuto';

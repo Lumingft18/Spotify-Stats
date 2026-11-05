@@ -60,7 +60,14 @@ describe('mood', () => {
     expect(getMood(0.8, 0.2)).toBe('sereno');
     expect(getMood(0.2, 0.8)).toBe('arrabbiato');
     expect(getMood(0.2, 0.2)).toBe('malinconico');
-    expect(getMood(0.5, 0.52)).toBe('neutrale');
+    expect(getMood(0.5, 0.66)).toBe('neutrale');
+    // Energy is centred at 0.65 (catalog median), not 0.5: mid-energy sad songs are melancholic, not tense.
+    expect(getMood(0.34, 0.53)).toBe('malinconico'); // Rocket Man
+    expect(getMood(0.14, 0.57)).toBe('malinconico'); // After Hours
+    expect(getMood(0.15, 0.85)).toBe('arrabbiato');
+    expect(getMood(0.7, 0.6)).toBe('sereno');
+    expect(getMood(0.6, null)).toBe('sereno');
+    expect(getMood(0.52, null)).toBe('neutrale');
     expect(getMood(null, 0.5)).toBe('sconosciuto');
   });
 });

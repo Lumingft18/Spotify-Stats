@@ -25,6 +25,8 @@ createRoot(document.getElementById('root')!).render(
   </StrictMode>,
 );
 
+if (import.meta.env.DEV) void import('./dev/debugClient').then((m) => m.startDebugClient());
+
 if ('serviceWorker' in navigator && import.meta.env.PROD) {
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('/sw.js').catch(() => undefined);
