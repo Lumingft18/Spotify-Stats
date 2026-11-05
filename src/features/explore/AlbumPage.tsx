@@ -7,6 +7,9 @@ import { Cover } from '../../components/Cover';
 import { EntityList } from '../../components/EntityList';
 import { Badge, Card, Empty, Section, Skeleton, Stat } from '../../components/ui';
 import { MonthlyBars } from '../../components/charts/common';
+import { StoryButton } from '../../components/StoryButton';
+import { periodLabel } from '../../lib/storyCard';
+import { useApp } from '../../lib/store';
 
 export default function AlbumPage({ artist, album }: { artist: string; album: string }) {
   const s = useSqlOne<{ minutes: number; plays: number; tracks: number; first_day: string; last_day: string; skip_rate: number; cover: string | null }>(
@@ -27,6 +30,7 @@ export default function AlbumPage({ artist, album }: { artist: string; album: st
   );
   const a = s.row;
   useAccentFrom(a?.cover);
+  const range = useApp((st) => st.range);
   if (s.data && (!a || a.minutes == null)) return <Empty title="Nessun ascolto di questo album nel periodo" />;
 
   return (
@@ -39,6 +43,28 @@ export default function AlbumPage({ artist, album }: { artist: string; album: st
           <a href={routes.artist(artist)} className="mt-2 inline-block text-lg text-text-muted hover:text-[var(--accent)]">
             {artist}
           </a>
+          <div className="mt-4">
+            <StoryButton
+              build={() =>
+                a
+                  ? {
+                      kicker: `Album · ${periodLabel(range)}`,
+                      title: album,
+                      subtitle: artist,
+                      image: a.cover,
+                      stats: [
+                        { label: 'Tempo', value: fmtHours(a.minutes) },
+                        { label: 'Ascolti', value: fmtInt(a.plays) },
+                        { label: 'Brani diversi', value: fmtInt(a.tracks) },
+                        { label: 'Dal', value: fmtDate(a.first_day) },
+                      ],
+                      sections: [{ title: 'Tracce più ascoltate', rows: (tracks.data ?? []).map((t) => ({ label: t.label, value: fmtInt(t.plays) + '×' })) }],
+                      filename: `${artist} ${album}`,
+                    }
+                  : null
+              }
+            />
+          </div>
         </div>
       </header>
       {a && (

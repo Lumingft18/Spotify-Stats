@@ -9,6 +9,9 @@ import { Cover } from '../../components/Cover';
 import { EntityList } from '../../components/EntityList';
 import { Card, Empty, Section, Skeleton, Stat, Badge } from '../../components/ui';
 import { HourDowHeatmap, MonthlyBars } from '../../components/charts/common';
+import { StoryButton } from '../../components/StoryButton';
+import { periodLabel } from '../../lib/storyCard';
+import { useApp } from '../../lib/store';
 
 interface ArtistStats {
   minutes: number;
@@ -57,6 +60,7 @@ export default function ArtistPage({ name }: { name: string }) {
   const similar = useAsync(() => similarArtists(name, 8), [name]);
   const a = s.row;
   useAccentFrom(a?.cover);
+  const range = useApp((st) => st.range);
 
   if (s.data && (!a || a.minutes == null)) {
     return <Empty title="Nessun ascolto in questo periodo">Prova a cambiare il periodo in alto.</Empty>;
@@ -78,6 +82,29 @@ export default function ArtistPage({ name }: { name: string }) {
               {fmtPct(a.share, 1)} del tuo ascolto · con te dal {fmtDate(a.first_day)} · ultima volta {fmtDate(a.last_day)}
             </p>
           )}
+          <div className="mt-4">
+            <StoryButton
+              build={() =>
+                a
+                  ? {
+                      kicker: `Artista #${fmtInt(a.rank)} · ${periodLabel(range)}`,
+                      title: name,
+                      subtitle: `${fmtPct(a.share, 1)} del mio ascolto · con me dal ${fmtDate(a.first_day)}`,
+                      image: a.cover,
+                      roundImage: true,
+                      stats: [
+                        { label: 'Tempo', value: fmtHours(a.minutes) },
+                        { label: 'Ascolti', value: fmtInt(a.plays) },
+                        { label: 'Brani diversi', value: fmtInt(a.tracks) },
+                        { label: 'Mood', value: moodLabel(mood) },
+                      ],
+                      sections: [{ title: 'I suoi brani che ascolto di più', rows: (tracks.data ?? []).slice(0, 5).map((t) => ({ label: t.label, value: fmtHours(t.minutes) })) }],
+                      filename: name,
+                    }
+                  : null
+              }
+            />
+          </div>
         </div>
       </header>
 

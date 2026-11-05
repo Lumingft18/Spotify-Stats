@@ -12,6 +12,8 @@ import { useLlmAvailable } from '../../llm/client';
 import { Button, Spinner } from '../../components/ui';
 import { Cover } from '../../components/Cover';
 import { profileFirstName } from '../../data/account';
+import { StoryButton } from '../../components/StoryButton';
+import { exportStory, type StoryCardSpec } from '../../lib/storyCard';
 
 interface StoryData {
   /** 0 = all years */
@@ -109,88 +111,103 @@ function defaultCaptions(d: StoryData): Record<string, string> {
   };
 }
 
-async function shareCard(d: StoryData) {
-  const W = 1080;
-  const H = 1920;
-  const c = document.createElement('canvas');
-  c.width = W;
-  c.height = H;
-  const ctx = c.getContext('2d')!;
-  const accent = (d.artist?.cover && (await extractAccent(d.artist.cover))) || '#8fd16a';
-  const g = ctx.createLinearGradient(0, 0, 0, H);
-  g.addColorStop(0, '#20232c');
-  g.addColorStop(1, '#0f1116');
-  ctx.fillStyle = g;
-  ctx.fillRect(0, 0, W, H);
-  ctx.fillStyle = accent;
-  ctx.globalAlpha = 0.25;
-  ctx.beginPath();
-  ctx.arc(W * 0.85, 260, 420, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.globalAlpha = 1;
-  await document.fonts.ready;
-  ctx.fillStyle = '#9aa0ab';
-  ctx.font = '500 40px "Geist Variable", system-ui';
-  ctx.fillText(d.year ? `IL MIO ${d.year} IN MUSICA` : 'TUTTA LA MIA MUSICA', 90, 180);
-  ctx.fillStyle = '#f4f5f8';
-  ctx.font = '400 230px "Instrument Serif", Georgia, serif';
-  ctx.fillText(`${fmtInt(d.minutes / 60)}`, 80, 420);
-  ctx.font = '400 90px "Instrument Serif", Georgia, serif';
-  ctx.fillStyle = accent;
-  ctx.fillText('ore di ascolto', 90, 530);
-  const loadImg = (src: string) =>
-    new Promise<HTMLImageElement | null>((res) => {
-      const i = new Image();
-      i.crossOrigin = 'anonymous';
-      i.onload = () => res(i);
-      i.onerror = () => res(null);
-      i.src = src;
-    });
-  let y = 680;
-  ctx.fillStyle = '#9aa0ab';
-  ctx.font = '500 36px "Geist Variable", system-ui';
-  ctx.fillText('ARTISTI', 90, y);
-  y += 40;
-  for (const [i, a] of d.artists5.entries()) {
-    const img = a.cover ? await loadImg(a.cover) : null;
-    if (img) {
-      ctx.save();
-      ctx.beginPath();
-      ctx.arc(90 + 55, y + 55, 55, 0, Math.PI * 2);
-      ctx.clip();
-      ctx.drawImage(img, 90, y, 110, 110);
-      ctx.restore();
-    }
-    ctx.fillStyle = '#f4f5f8';
-    ctx.font = '500 52px "Geist Variable", system-ui';
-    ctx.fillText(`${i + 1}. ${a.artist}`.slice(0, 26), 230, y + 72);
-    y += 140;
+type StoryKey = 'summary' | 'intro' | 'time' | 'years' | 'artist' | 'track' | 'mood' | 'habits';
+
+function storySpec(d: StoryData, key: StoryKey, cap: Record<string, string>): StoryCardSpec {
+  const kicker = d.year ? `Il mio ${d.year} in musica` : 'Tutta la mia musica';
+  const filename = `${d.year || 'tutti-gli-anni'}-${key}`;
+  const hours = { value: fmtInt(d.minutes / 60), unit: 'ore di ascolto' };
+  switch (key) {
+    case 'intro':
+      return {
+        kicker,
+        hero: hours,
+        stats: [
+          { label: 'Giorni con musica', value: `${fmtInt(d.activeDays)} / ${fmtInt(d.days)}` },
+          { label: 'Brani diversi', value: fmtInt(d.uniqueTracks) },
+        ],
+        note: cap.intro,
+        accentFrom: d.artist?.cover,
+        filename,
+      };
+    case 'time':
+      return {
+        kicker: `${kicker} · il ritmo`,
+        title: d.topMonth ? fmtMonth(d.topMonth.ym) : 'Il ritmo',
+        subtitle: d.topMonth ? `il mio mese più intenso · ${fmtHours(d.topMonth.minutes)}` : undefined,
+        stats: d.topDay ? [{ label: 'Giorno record', value: fmtHours(d.topDay.minutes) }] : undefined,
+        note: cap.time,
+        accentFrom: d.artist?.cover,
+        filename,
+      };
+    case 'years':
+      return {
+        kicker: 'Anno per anno',
+        title: `${d.byYear.length} anni di musica`,
+        bars: { title: 'Ore per anno', values: d.byYear.map((y) => y.minutes), from: String(d.byYear[0]?.year ?? ''), to: String(d.byYear[d.byYear.length - 1]?.year ?? '') },
+        sections: [{ title: 'Artista dell’anno', rows: [...d.byYear].reverse().map((y) => ({ label: String(y.year), sub: y.artist, value: fmtHours(y.minutes), image: y.cover, round: true })) }],
+        accentFrom: d.byYear[d.byYear.length - 1]?.cover,
+        filename,
+      };
+    case 'artist':
+      return {
+        kicker: `${kicker} · il mio artista`,
+        title: d.artist?.artist ?? '',
+        image: d.artist?.cover ?? null,
+        roundImage: true,
+        hero: d.artist ? { value: fmtPct(d.artist.share), unit: 'del mio tempo' } : undefined,
+        note: cap.artist,
+        filename,
+      };
+    case 'track':
+      return {
+        kicker: `${kicker} · i miei brani`,
+        title: d.tracks5[0]?.track,
+        subtitle: d.tracks5[0] ? `${d.tracks5[0].artist} · ${fmtInt(d.tracks5[0].plays)} ascolti` : undefined,
+        image: d.tracks5[0]?.cover ?? null,
+        sections: [{ title: 'Top 5', rows: d.tracks5.map((t) => ({ label: t.track, sub: t.artist, value: `${fmtInt(t.plays)}×` })) }],
+        filename,
+      };
+    case 'mood':
+      return {
+        kicker: `${kicker} · il suono`,
+        title: d.mood ? moodLabel(d.mood.mood) : 'Il suono del mio anno',
+        hero: d.mood ? { value: fmtPct(d.mood.share), unit: 'del mio ascolto' } : undefined,
+        accent: d.mood ? MOOD_HEX[d.mood.mood] : undefined,
+        note: cap.mood,
+        filename,
+      };
+    case 'habits':
+      return {
+        kicker: `${kicker} · abitudini`,
+        title: d.peak ? `${DOW_LONG[d.peak.dow - 1]} alle ${d.peak.hour}` : 'Abitudini',
+        subtitle: 'il mio momento musicale',
+        stats: [
+          { label: 'Brani saltati', value: fmtPct(d.skip) },
+          { label: d.year ? 'Artisti scoperti' : 'Artisti', value: fmtInt(d.newArtists) },
+          ...(d.newTop ? [{ label: 'Scoperta top', value: d.newTop.artist }] : []),
+        ],
+        note: cap.habits,
+        accentFrom: d.artist?.cover,
+        filename,
+      };
+    default:
+      return {
+        kicker,
+        hero: hours,
+        sections: [
+          { title: 'Artisti', rows: d.artists5.map((a) => ({ label: a.artist, value: fmtHours(a.minutes), image: a.cover, round: true })) },
+          { title: 'Brani', rows: d.tracks5.map((t) => ({ label: t.track, sub: t.artist })) },
+        ],
+        accentFrom: d.artist?.cover,
+        filename: `${d.year || 'tutti-gli-anni'}`,
+      };
   }
-  y += 40;
-  ctx.fillStyle = '#9aa0ab';
-  ctx.font = '500 36px "Geist Variable", system-ui';
-  ctx.fillText('BRANI', 90, y);
-  y += 70;
-  for (const [i, t] of d.tracks5.entries()) {
-    ctx.fillStyle = '#f4f5f8';
-    ctx.font = '500 46px "Geist Variable", system-ui';
-    ctx.fillText(`${i + 1}. ${t.track}`.slice(0, 32), 90, y);
-    ctx.fillStyle = '#9aa0ab';
-    ctx.font = '400 34px "Geist Variable", system-ui';
-    ctx.fillText(t.artist.slice(0, 40), 140, y + 44);
-    y += 110;
-  }
-  ctx.fillStyle = '#5b6170';
-  ctx.font = '400 30px "Geist Mono Variable", monospace';
-  ctx.fillText('ascolti · calcolato in locale', 90, H - 90);
-  const url = c.toDataURL('image/png');
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `ascolti-${d.year || 'tutti-gli-anni'}.png`;
-  a.click();
 }
 
-function Chapter({ children, accentFrom, kicker }: { children: React.ReactNode; accentFrom?: string | null; kicker: string }) {
+const shareCard = (d: StoryData) => exportStory(storySpec(d, 'summary', {}));
+
+function Chapter({ children, accentFrom, kicker, story }: { children: React.ReactNode; accentFrom?: string | null; kicker: string; story?: () => StoryCardSpec }) {
   const ref = useRef<HTMLElement>(null);
   useEffect(() => {
     const el = ref.current;
@@ -207,7 +224,10 @@ function Chapter({ children, accentFrom, kicker }: { children: React.ReactNode; 
   return (
     <section ref={ref} data-chapter={kicker} className="relative flex min-h-[100svh] flex-col justify-center px-6 py-24 md:px-16">
       <div className="story-reveal mx-auto w-full max-w-5xl 2xl:max-w-7xl">
-        <div className="mb-6 text-xs font-medium uppercase tracking-[0.2em] text-text-faint">{kicker}</div>
+        <div className="mb-6 flex items-center justify-between gap-3">
+          <div className="text-xs font-medium uppercase tracking-[0.2em] text-text-faint">{kicker}</div>
+          {story && <StoryButton variant="ghost" build={story} />}
+        </div>
         {children}
       </div>
     </section>
@@ -395,7 +415,7 @@ export default function StoryPage() {
           )}
           {d && (
             <Button size="sm" onClick={() => void shareCard(d)}>
-              <Download size={14} /> Immagine
+              <Download size={14} /> Storia IG
             </Button>
           )}
           <a href={routes.overview()} aria-label="Chiudi racconto" className="grid size-8 place-items-center rounded-full text-text-muted hover:bg-surface-2">
@@ -413,7 +433,7 @@ export default function StoryPage() {
 
       {d && (
         <>
-          <Chapter kicker={d.year ? (firstName ? `Il ${d.year} di ${firstName}` : `Il tuo ${d.year}`) : firstName ? `Tutti gli anni di ${firstName}` : 'Tutti i tuoi anni'} accentFrom={d.artist?.cover}>
+          <Chapter kicker={d.year ? (firstName ? `Il ${d.year} di ${firstName}` : `Il tuo ${d.year}`) : firstName ? `Tutti gli anni di ${firstName}` : 'Tutti i tuoi anni'} accentFrom={d.artist?.cover} story={() => storySpec(d, 'intro', cap)}>
             <div className="display text-[clamp(5rem,18vw,13rem)] leading-[0.85]">
               <span className="num font-sans font-medium tracking-tighter">{fmtInt(d.minutes / 60)}</span>
               <span className="text-[0.35em]"> ore</span>
@@ -424,7 +444,7 @@ export default function StoryPage() {
             </button>
           </Chapter>
 
-          <Chapter kicker="Il ritmo">
+          <Chapter kicker="Il ritmo" story={() => storySpec(d, 'time', cap)}>
             <div className="grid gap-10 md:grid-cols-3">
               <div>
                 <div className="num text-6xl">{fmtInt(d.activeDays)}</div>
@@ -447,7 +467,7 @@ export default function StoryPage() {
           </Chapter>
 
           {d.byYear.length > 1 && (
-            <Chapter kicker="Anno per anno" accentFrom={d.byYear[d.byYear.length - 1].cover}>
+            <Chapter kicker="Anno per anno" accentFrom={d.byYear[d.byYear.length - 1].cover} story={() => storySpec(d, 'years', cap)}>
               <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
                 {d.byYear.map((y) => {
                   const max = Math.max(...d.byYear.map((x) => x.minutes));
@@ -478,7 +498,7 @@ export default function StoryPage() {
           )}
 
           {d.artist && (
-            <Chapter kicker="Il tuo artista" accentFrom={d.artist.cover}>
+            <Chapter kicker="Il tuo artista" accentFrom={d.artist.cover} story={() => storySpec(d, 'artist', cap)}>
               <div className="flex flex-col items-start gap-8 md:flex-row md:items-center">
                 <Cover src={d.artist.cover} name={d.artist.artist} size={260} round className="shadow-2xl" />
                 <div>
@@ -498,7 +518,7 @@ export default function StoryPage() {
           )}
 
           {d.tracks5.length > 0 && (
-            <Chapter kicker="I tuoi brani" accentFrom={d.tracks5[0].cover}>
+            <Chapter kicker="I tuoi brani" accentFrom={d.tracks5[0].cover} story={() => storySpec(d, 'track', cap)}>
               <ol className="flex flex-col gap-4">
                 {d.tracks5.map((t, i) => (
                   <li key={t.uri} className="flex items-center gap-5">
@@ -517,7 +537,7 @@ export default function StoryPage() {
             </Chapter>
           )}
 
-          <Chapter kicker="Il suono del tuo anno">
+          <Chapter kicker="Il suono del tuo anno" story={() => storySpec(d, 'mood', cap)}>
             {d.mood ? (
               <div className="display text-[clamp(4rem,12vw,9rem)] leading-none" style={{ color: MOOD_HEX[d.mood.mood] }}>
                 {moodLabel(d.mood.mood)}
@@ -529,7 +549,7 @@ export default function StoryPage() {
             <p className="mt-10 max-w-xl text-2xl text-text-muted">{cap.mood}</p>
           </Chapter>
 
-          <Chapter kicker="Abitudini">
+          <Chapter kicker="Abitudini" story={() => storySpec(d, 'habits', cap)}>
             <div className="grid gap-10 md:grid-cols-3">
               {d.peak && (
                 <div>

@@ -10,6 +10,11 @@ import { spotifyId } from '../../enrichment/providers';
 import { Badge, Button, Card, Empty, ErrorNote, PageHeader, Section, Skeleton, Spinner } from '../../components/ui';
 import { Cover } from '../../components/Cover';
 import { PlotChart, Plot } from '../../components/charts/PlotChart';
+import { StoryButton } from '../../components/StoryButton';
+import { periodLabel } from '../../lib/storyCard';
+import { useApp } from '../../lib/store';
+
+const usePeriod = () => periodLabel(useApp((s) => s.range));
 
 function Explain({ children }: { children: React.ReactNode }) {
   return (
@@ -23,6 +28,7 @@ function Explain({ children }: { children: React.ReactNode }) {
 }
 
 function SkipModel() {
+  const period = usePeriod();
   const [seed, setSeed] = useState(0);
   const res = useAsync(trainSkipModel, [seed]);
   const m = res.value;
@@ -100,12 +106,25 @@ function SkipModel() {
         <Button size="sm" variant="ghost" onClick={() => setSeed((s) => s + 1)}>
           <RefreshCw size={14} /> Riaddestra
         </Button>
+        <StoryButton
+          variant="ghost"
+          build={() => ({
+            kicker: `Perché salto i brani · ${period}`,
+            title: 'Cosa mi fa saltare un brano',
+            subtitle: `modello addestrato su ${fmtInt(m.nTrain)} ascolti · AUC ${m.auc.toFixed(2)}`,
+            hero: { value: fmtPct(m.baseRate), unit: 'dei brani saltati' },
+            sections: [{ title: 'I fattori', rows: strong.map((e) => ({ label: e.sentence.charAt(0).toUpperCase() + e.sentence.slice(1) })) }],
+            bars: { title: 'Salti per ora del giorno', values: m.byHour.map((h) => h.rate), from: '0:00', to: '23:00' },
+            filename: `salti ${period}`,
+          })}
+        />
       </div>
     </div>
   );
 }
 
 function Eras() {
+  const period = usePeriod();
   const ai = useLlmAvailable();
   const [v, setV] = useState(0);
   const eras = useAsync(() => detectEras(7), [v]);
@@ -153,6 +172,15 @@ function Eras() {
         >
           {busy ? <Spinner size={14} /> : <Wand2 size={14} />} Dai un titolo alle ere con AI
         </Button>
+        <StoryButton
+          build={() => ({
+            kicker: `Le mie ere musicali · ${period}`,
+            title: `${list.length} capitoli`,
+            subtitle: `${fmtMonth(list[0].from)} – ${fmtMonth(list[list.length - 1].to)}`,
+            sections: [{ title: 'Ere', rows: list.map((e) => ({ label: e.name, sub: e.topArtists.slice(0, 3).join(' · '), value: `${e.months} mesi` })) }],
+            filename: `ere ${period}`,
+          })}
+        />
         {err && <ErrorNote>{err}</ErrorNote>}
       </div>
       <Explain>
@@ -164,6 +192,7 @@ function Eras() {
 }
 
 function Lifecycle() {
+  const period = usePeriod();
   const s = useAsync(() => artistSurvival(90));
   const make = useCallback(
     () => ({
@@ -185,6 +214,21 @@ function Lifecycle() {
           {v.medianDays ? <>Metà degli artisti che scopri li lasci entro {fmtInt(v.medianDays)} giorni</> : 'La maggior parte degli artisti resta con te'}
         </div>
         <PlotChart make={make} height={220} ariaLabel="Curva di sopravvivenza degli artisti" />
+        <div className="mt-3">
+          <StoryButton
+            build={() => ({
+              kicker: `Quanto durano le mie passioni · ${period}`,
+              ...(v.medianDays
+                ? { hero: { value: fmtInt(v.medianDays), unit: 'giorni' }, note: 'Metà degli artisti che scopro li lascio entro questo tempo.' }
+                : { title: 'Gli artisti restano con me' }),
+              sections: [
+                { title: 'Fedelissimi', rows: v.loyal.slice(0, 5).map((l) => ({ label: l.artist, value: `${l.returns}× ritorni` })) },
+                { title: 'Fiammate', rows: v.flames.slice(0, 4).map((f) => ({ label: f.artist, value: fmtMonth(f.peakMonth) })) },
+              ],
+              filename: `passioni ${period}`,
+            })}
+          />
+        </div>
         <Explain>
           Stimatore di Kaplan–Meier: un artista “esce” quando passano più di {v.churnGapDays} giorni senza ascoltarlo. Gli artisti ancora attivi
           sono trattati come osservazioni censurate, quindi la curva non penalizza le scoperte recenti.
@@ -221,6 +265,7 @@ function Lifecycle() {
 }
 
 function Rediscovery() {
+  const period = usePeriod();
   const [v, setV] = useState(0);
   const c = useAsync(() => rediscoveryCandidates(12), [v]);
   const [voted, setVoted] = useState<Record<string, boolean>>({});
@@ -262,6 +307,14 @@ function Rediscovery() {
         <Button size="sm" onClick={() => void navigator.clipboard.writeText(ids.map((id) => `https://open.spotify.com/track/${id}`).join('\n'))}>
           Copia link per una playlist
         </Button>
+        <StoryButton
+          build={() => ({
+            kicker: `Da riscoprire · ${period}`,
+            title: 'Brani che amavo e avevo dimenticato',
+            sections: [{ title: 'Riscoperte', rows: c.value!.slice(0, 7).map((x) => ({ label: x.track, sub: x.artist, value: `${fmtInt(x.plays)}×`, image: x.cover })) }],
+            filename: `riscoperte ${period}`,
+          })}
+        />
       </div>
       <Explain>
         Bandit con Thompson sampling: ogni gruppo musicale della tua galassia ha una distribuzione Beta che si aggiorna con i tuoi 👍/👎. I

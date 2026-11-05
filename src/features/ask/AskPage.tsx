@@ -8,6 +8,7 @@ import { useApp } from '../../lib/store';
 import { Button, Card, ErrorNote, PageHeader, Spinner, cx } from '../../components/ui';
 import { Cover } from '../../components/Cover';
 import { PlotChart, Plot } from '../../components/charts/PlotChart';
+import { StoryButton } from '../../components/StoryButton';
 
 const SUGGESTIONS = [
   'Qual è stato il mio artista dell’estate scorsa?',
@@ -104,7 +105,15 @@ function AgentChart({ spec }: { spec: ChartSpec }) {
   );
 }
 
-function AssistantMessage({ m }: { m: AgentMessage }) {
+const plain = (md: string) =>
+  md
+    .replace(/`([^`]*)`/g, '$1')
+    .replace(/\*\*?([^*]+)\*\*?/g, '$1')
+    .replace(/^\s*(?:[-*]|\d+\.)\s+/gm, '• ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+function AssistantMessage({ m, question }: { m: AgentMessage; question?: string }) {
   return (
     <div className="flex flex-col gap-4">
       <Markdown text={m.content} />
@@ -122,6 +131,18 @@ function AssistantMessage({ m }: { m: AgentMessage }) {
           ))}
         </div>
       )}
+      <div>
+        <StoryButton
+          variant="ghost"
+          build={() => ({
+            kicker: 'Ho chiesto ai miei dati',
+            title: question,
+            note: plain(m.content),
+            sections: m.tracks?.length ? [{ title: 'Brani', rows: m.tracks.slice(0, 5).map((t) => ({ label: t.track, sub: t.artist, image: t.cover })) }] : undefined,
+            filename: question ?? 'risposta',
+          })}
+        />
+      </div>
       {m.traces && m.traces.length > 0 && (
         <details className="text-xs text-text-faint">
           <summary className="flex cursor-pointer list-none items-center gap-1.5 hover:text-text-muted">
@@ -227,7 +248,7 @@ export default function AskPage() {
                 <Sparkles size={14} />
               </div>
               <div className="min-w-0 flex-1">
-                <AssistantMessage m={m} />
+                <AssistantMessage m={m} question={history[i - 1]?.role === 'user' ? history[i - 1].content : undefined} />
               </div>
             </div>
           ),

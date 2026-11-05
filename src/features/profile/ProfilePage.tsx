@@ -37,6 +37,8 @@ function wrappedHighlights(summary: Record<string, unknown>): string[] {
   return out;
 }
 
+import { StoryButton } from '../../components/StoryButton';
+
 export default function ProfilePage() {
   const profile = useApp((s) => s.profile);
   const dataset = useApp((s) => s.dataset);
@@ -123,6 +125,30 @@ export default function ProfilePage() {
         }
         right={
           <div className="flex flex-col items-start gap-2 md:items-end">
+            {hasAccount && (
+              <StoryButton
+                size="md"
+                build={() => ({
+                  kicker: profile?.createdAt ? `Su Spotify dal ${fmtDate(profile.createdAt)}` : 'Il mio profilo Spotify',
+                  title,
+                  subtitle: profile?.username ? `@${profile.username}` : undefined,
+                  stats: [
+                    { label: 'Brani salvati', value: fmtInt(profile!.library.tracks) },
+                    { label: 'Artisti seguiti', value: fmtInt(profile!.library.artists) },
+                    { label: 'Playlist', value: fmtInt(profile!.playlists.length) },
+                    { label: 'Ricerche', value: fmtInt(profile!.searches.length) },
+                  ],
+                  sections: [
+                    { title: 'Cosa cerco di più', rows: topSearches.slice(0, 5).map(([q, n]) => ({ label: q, value: `${n}×` })) },
+                    {
+                      title: 'Playlist più grandi',
+                      rows: [...profile!.playlists].sort((a, b) => b.tracks - a.tracks).slice(0, 4).map((pl) => ({ label: pl.name, value: `${fmtInt(pl.tracks)} brani` })),
+                    },
+                  ],
+                  filename: `profilo ${title}`,
+                })}
+              />
+            )}
             <Button onClick={() => input.current?.click()} disabled={!!step}>
               {step ? <Spinner size={14} /> : <Upload size={14} />} {hasAccount ? 'Aggiorna dati account' : 'Carica dati account'}
             </Button>

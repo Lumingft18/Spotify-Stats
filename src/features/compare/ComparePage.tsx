@@ -9,6 +9,7 @@ import { fmtHours, fmtInt, fmtPct } from '../../lib/format';
 import { routes } from '../../lib/router';
 import { centroid, loadIndex } from '../../ml/embeddings';
 import { Badge, Button, Card, Empty, ErrorNote, Meter, PageHeader, Section, Spinner } from '../../components/ui';
+import { StoryButton } from '../../components/StoryButton';
 
 /** Only aggregates are stored for friends — never their raw history. */
 interface Friend {
@@ -133,6 +134,20 @@ function FriendCard({ f, onRemove }: { f: Friend; onRemove: () => void }) {
               <div className="num text-5xl text-[var(--accent)]">{c.value.score}</div>
               <div className="text-xs text-text-faint">compatibilità su 100</div>
             </div>
+          )}
+          {c.value && (
+            <StoryButton
+              build={() => ({
+                kicker: 'Compatibilità musicale',
+                title: `Io e ${f.name}`,
+                hero: { value: `${c.value!.score}`, unit: 'su 100' },
+                sections: [
+                  { title: 'Artisti in comune', rows: c.value!.sharedArtists.slice(0, 5).map((s) => ({ label: s.artist })) },
+                  { title: 'Brani che amiamo entrambi', rows: c.value!.sharedTracks.slice(0, 4).map((t) => ({ label: t.track, sub: t.artist })) },
+                ],
+                filename: `compatibilita ${f.name}`,
+              })}
+            />
           )}
           <Button size="sm" variant="ghost" aria-label={`Rimuovi ${f.name}`} onClick={onRemove}>
             <Trash2 size={14} />

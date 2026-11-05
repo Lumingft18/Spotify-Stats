@@ -6,6 +6,9 @@ import { sessionStats } from '../../ml/models';
 import { Card, PageHeader, Section, Segmented, Skeleton, Stat, Meter } from '../../components/ui';
 import { HourDowHeatmap } from '../../components/charts/common';
 import { PlotChart, Plot } from '../../components/charts/PlotChart';
+import { StoryButton } from '../../components/StoryButton';
+import { periodLabel } from '../../lib/storyCard';
+import { useApp } from '../../lib/store';
 
 function Calendar({ days }: { days: Array<{ day: string; minutes: number }> }) {
   const years = useMemo(() => Array.from(new Set(days.map((d) => d.day.slice(0, 4)))).sort().reverse(), [days]);
@@ -100,6 +103,34 @@ export default function TimePage() {
   const peak = heatRows.reduce<{ dow: number; hour: number; value: number } | null>((a, b) => (!a || b.value > a.value ? b : a), null);
   const totalPlat = (platforms.data ?? []).reduce((a, b) => a + b.minutes, 0);
   const skipTotal = (skipBuckets.data ?? []).reduce((a, b) => a + b.n, 0);
+  const range = useApp((st) => st.range);
+  const buildStory = () => {
+    if (!heat.data || !peak) return null;
+    const byHour = Array.from({ length: 24 }, (_, h) => heat.data!.filter((d) => d.hour === h).reduce((a, b) => a + b.avg_minutes, 0));
+    const peakHour = byHour.indexOf(Math.max(...byHour));
+    const sv = sess.value;
+    return {
+      kicker: `Quando ascolto · ${periodLabel(range)}`,
+      title: `${DOW_LONG[peak.dow - 1]} alle ${peak.hour}:00`,
+      subtitle: 'il mio momento musicale della settimana',
+      stats: sv
+        ? [
+            { label: 'Sessioni', value: fmtInt(sv.sessions) },
+            { label: 'Durata media', value: fmtDuration(sv.avgMinutes) },
+            ...(sv.longest ? [{ label: 'Sessione record', value: fmtDuration(sv.longest.minutes) }] : []),
+            { label: 'Ora di punta', value: `${peakHour}:00` },
+          ]
+        : [{ label: 'Ora di punta', value: `${peakHour}:00` }],
+      bars: { title: 'Ascolto per ora del giorno', values: byHour, from: '0:00', to: '23:00', highlight: peakHour },
+      sections: [
+        {
+          title: 'Da dove ascolto',
+          rows: (platforms.data ?? []).slice(0, 4).map((p) => ({ label: p.platform, value: fmtPct(p.minutes / Math.max(1, totalPlat)) })),
+        },
+      ],
+      filename: `tempo ${periodLabel(range)}`,
+    };
+  };
 
   const bucketChart = useCallback(
     () => ({
@@ -114,7 +145,7 @@ export default function TimePage() {
 
   return (
     <div className="flex flex-col gap-12">
-      <PageHeader kicker="Tempo" title="Quando ascolti" sub="Ritmi, abitudini e sessioni. Le ore sono nel tuo fuso orario." />
+      <PageHeader kicker="Tempo" title="Quando ascolti" sub="Ritmi, abitudini e sessioni. Le ore sono nel tuo fuso orario." right={<StoryButton build={buildStory} />} />
 
       <Section
         kicker="Settimana tipo"

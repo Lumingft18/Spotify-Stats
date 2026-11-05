@@ -15,6 +15,8 @@ import { computeInsights } from './insights';
 import { detectEras } from '../../ml/models';
 import { PackagesBanner } from '../../components/PackagesBanner';
 import { profileFirstName } from '../../data/account';
+import { StoryButton } from '../../components/StoryButton';
+import { periodLabel } from '../../lib/storyCard';
 
 function usePrevWindow(k: Kpi | null) {
   const range = useApp((s) => s.range);
@@ -76,6 +78,27 @@ export function Overview() {
     [months],
   );
 
+  const range = useApp((s) => s.range);
+  const buildStory = () =>
+    k
+      ? {
+          kicker: periodLabel(range) + ' in musica',
+          hero: { value: fmtInt(k.minutes / 60), unit: 'ore di ascolto' },
+          stats: [
+            { label: 'Ascolti', value: fmtInt(k.plays) },
+            { label: 'Brani diversi', value: fmtInt(k.tracks) },
+            { label: 'Artisti', value: fmtInt(k.artists) },
+            { label: 'Giorni con musica', value: fmtPct(k.active_days / Math.max(1, days)) },
+          ],
+          sections: [
+            { title: 'Top artisti', rows: (topArtists.data ?? []).map((a) => ({ label: a.label, value: fmtHours(a.minutes), image: a.cover, round: true })) },
+            { title: 'Top brani', rows: (topTracks.data ?? []).map((t) => ({ label: t.label, sub: t.artist })) },
+          ],
+          accentFrom: hero?.cover,
+          filename: periodLabel(range),
+        }
+      : null;
+
   const coverPct = coverage.row && coverage.row.total ? coverage.row.covers / coverage.row.total : 1;
 
   return (
@@ -103,6 +126,9 @@ export function Overview() {
           ) : (
             <Skeleton className="h-28 w-3/4" />
           )}
+          <div className="mt-4">
+            <StoryButton build={buildStory} />
+          </div>
           <div className="mt-5">{months.length > 2 && <Sparkline values={months.map((m) => m.minutes)} width={320} height={46} />}</div>
         </div>
 

@@ -11,6 +11,9 @@ import { spotifyId } from '../../enrichment/providers';
 import { Cover } from '../../components/Cover';
 import { Badge, Button, Card, Empty, Section, Skeleton, Stat } from '../../components/ui';
 import { HourDowHeatmap, MonthlyBars } from '../../components/charts/common';
+import { StoryButton } from '../../components/StoryButton';
+import { periodLabel } from '../../lib/storyCard';
+import { useApp } from '../../lib/store';
 
 interface TrackInfo {
   track: string;
@@ -68,6 +71,7 @@ export default function TrackPage({ uri }: { uri: string }) {
   const s = stats.row;
   useAccentFrom(t?.cover);
   const id = spotifyId(uri);
+  const range = useApp((st) => st.range);
 
   if (info.data && !t) return <Empty title="Brano non trovato" />;
   const mood = t ? getMood(t.valence, t.energy) : 'sconosciuto';
@@ -97,8 +101,30 @@ export default function TrackPage({ uri }: { uri: string }) {
               )}
             </p>
           )}
+          <div className="mt-4 flex flex-wrap gap-2">
+            <StoryButton
+              build={() =>
+                t && s && s.minutes != null
+                  ? {
+                      kicker: `Brano · ${periodLabel(range)}`,
+                      title: t.track,
+                      subtitle: [t.artist, t.album].filter(Boolean).join(' · '),
+                      image: t.cover,
+                      hero: { value: fmtInt(s.plays), unit: s.plays === 1 ? 'ascolto' : 'ascolti' },
+                      stats: [
+                        { label: 'Tempo', value: fmtHours(s.minutes) },
+                        { label: 'Record in un giorno', value: `${fmtInt(s.best_n)}×` },
+                        { label: 'Ascoltato fino a', value: fmtPct(s.completion) },
+                        { label: 'Mood', value: moodLabel(mood) },
+                      ],
+                      filename: `${t.artist} ${t.track}`,
+                    }
+                  : null
+              }
+            />
+          </div>
           {id && (
-            <div className="mt-4 flex flex-wrap gap-2">
+            <div className="mt-2 flex flex-wrap gap-2">
               <Button size="sm" variant="primary" onClick={() => setPlayer((p) => !p)}>
                 <Play size={14} /> {player ? 'Nascondi player' : 'Ascolta un’anteprima'}
               </Button>

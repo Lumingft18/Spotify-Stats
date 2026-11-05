@@ -17,6 +17,8 @@ import { Galaxy, type GalaxyPoint } from '../../components/charts/Galaxy';
 import { MoodPlane } from '../../components/charts/common';
 import { PlotChart, Plot } from '../../components/charts/PlotChart';
 import { MoodTimeline } from './MoodTimeline';
+import { StoryButton } from '../../components/StoryButton';
+import { periodLabel } from '../../lib/storyCard';
 
 const CLUSTER_COLORS = ['#e8b94a', '#5cc6c0', '#e0604f', '#7f7bd6', '#8fd16a', '#e98ac0', '#4fa3e0', '#d9a066', '#b5e3d8', '#c7a3ff', '#f2d16b', '#6fd6a8', '#ff9f7a', '#9ab0ff'];
 
@@ -480,6 +482,27 @@ export default function MoodPage() {
   const known = (dist.data ?? []).filter((d) => d.mood !== 'sconosciuto');
   const totKnown = known.reduce((a, b) => a + b.minutes, 0);
   const top = known.reduce<{ mood: string; minutes: number } | null>((a, b) => (!a || b.minutes > a.minutes ? b : a), null);
+  const period = periodLabel(useApp((s) => s.range));
+  const buildStory = () =>
+    top && totKnown > 0
+      ? {
+          kicker: `Il mio suono · ${period}`,
+          title: `Soprattutto ${moodLabel(top.mood as never).toLowerCase()}`,
+          hero: { value: fmtPct(top.minutes / totKnown), unit: 'del mio tempo di ascolto' },
+          accent: MOOD_HEX[top.mood as keyof typeof MOOD_HEX],
+          sections: [
+            {
+              title: 'Stati d’animo',
+              rows: [...known].sort((a, b) => b.minutes - a.minutes).map((d) => ({ label: moodLabel(d.mood as never), value: fmtPct(d.minutes / totKnown) })),
+            },
+          ],
+          bars:
+            trend.data && trend.data.length > 2
+              ? { title: 'Positività mese per mese', values: trend.data.map((d) => d.valence), from: fmtMonth(trend.data[0].ym), to: fmtMonth(trend.data[trend.data.length - 1].ym) }
+              : undefined,
+          filename: `mood ${period}`,
+        }
+      : null;
 
   const planePts = useMemo(
     () =>
@@ -520,6 +543,7 @@ export default function MoodPage() {
         kicker="Mood & Galassia"
         title={top ? <>Il tuo suono è soprattutto <em style={{ color: MOOD_HEX[top.mood as keyof typeof MOOD_HEX] }}>{moodLabel(top.mood as never).toLowerCase()}</em></> : 'Che suono ha il tuo gusto'}
         sub="Positività (valence) ed energia di ogni brano, misurate dall’audio quando possibile o stimate dall’AI su testo e generi, con confidenza dichiarata."
+        right={<StoryButton build={buildStory} />}
       />
 
       <Section kicker="Umore nel tempo" title="Quando eri più felice e quando più triste, secondo ciò che ascoltavi">
@@ -585,11 +609,29 @@ function TopMoodTracks() {
      FROM p WHERE ${MOOD_SQL()} = ? GROUP BY uri ORDER BY minutes DESC LIMIT 20`,
     [mood],
   );
+  const period = periodLabel(useApp((s) => s.range));
   return (
     <Section
       kicker="Per stato d’animo"
       title="I brani che usi per ogni umore"
-      action={<Segmented value={mood} onChange={setMood} options={MOODS.filter((m) => m.id !== 'neutrale').map((m) => ({ value: m.id, label: m.label }))} />}
+      action={
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <Segmented value={mood} onChange={setMood} options={MOODS.filter((m) => m.id !== 'neutrale').map((m) => ({ value: m.id, label: m.label }))} />
+          <StoryButton
+            build={() =>
+              rows.data?.length
+                ? {
+                    kicker: `Colonna sonora · ${period}`,
+                    title: `Quando sono ${moodLabel(mood).toLowerCase()}`,
+                    accent: MOOD_HEX[mood],
+                    sections: [{ title: 'Brani', rows: rows.data.slice(0, 7).map((r) => ({ label: r.track, sub: r.artist, image: r.cover })) }],
+                    filename: `mood ${mood} ${period}`,
+                  }
+                : null
+            }
+          />
+        </div>
+      }
     >
       {rows.data?.length ? (
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6 2xl:grid-cols-8 min-[2400px]:grid-cols-10">
