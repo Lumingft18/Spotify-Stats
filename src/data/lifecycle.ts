@@ -127,7 +127,7 @@ async function importInto(
   const downgrade = mode === 'merge' && res.historyKind === 'legacy' && prevDataset?.historyKind === 'extended';
   if (hasHistory && !downgrade && mode === 'replace') {
     // New person / fresh start: drop personal derived data (catalog cache is kept and re-applied).
-    await kv.delMany(['emb_index', 'clusters', 'bandit_arms', 'bandit_feedback', 'mood_report', 'ask_history', 'era_names', 'meta_rows']);
+    await kv.delMany(['emb_index', 'clusters', 'bandit_arms', 'bandit_feedback', 'mood_report', 'ask_history', 'era_names', 'meta_rows', 'meta_ipc']);
     await exec('DELETE FROM meta; DELETE FROM clusters;').catch(() => undefined);
     clearIndexCache();
   }

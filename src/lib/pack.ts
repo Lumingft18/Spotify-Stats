@@ -27,7 +27,8 @@ function ctorName(v: ArrayBufferView): CtorName {
 
 export function pack(value: unknown): Uint8Array {
   const bufs: Uint8Array[] = [];
-  const v = JSON.parse(
+  // One serialization pass (large values, e.g. a few MB of rows, must not be stringified twice on the main thread).
+  const json =
     JSON.stringify(value === undefined ? null : value, (_k, x) => {
       if (ArrayBuffer.isView(x) && !(x instanceof DataView)) {
         bufs.push(new Uint8Array(x.buffer, x.byteOffset, x.byteLength));
@@ -35,9 +36,8 @@ export function pack(value: unknown): Uint8Array {
       }
       if (typeof x === 'bigint') return Number(x);
       return x;
-    }),
-  );
-  const head = new TextEncoder().encode(JSON.stringify({ v, b: bufs.map((b) => b.length) }));
+    }) ?? 'null';
+  const head = new TextEncoder().encode(`{"b":${JSON.stringify(bufs.map((b) => b.length))},"v":${json}}`);
   const start = 8 + head.length + pad8(8 + head.length);
   let size = start;
   for (const b of bufs) size += b.length + pad8(b.length);

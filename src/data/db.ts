@@ -156,10 +156,7 @@ export async function restore(): Promise<boolean> {
   if (!ipc) return false;
   await insertArrow(tableFromIPC(ipc), 'plays_raw');
   await buildDerived();
-  const metaRows = await kv.get<MetaRow[]>('meta_rows');
-  if (metaRows?.length) {
-    for (let i = 0; i < metaRows.length; i += 3000) await upsertMeta(metaRows.slice(i, i + 3000), false);
-  }
+  await restoreMeta();
   const clusters = await kv.get<Array<{ id: number; label: string }>>('clusters');
   if (clusters?.length) await setClusters(clusters, false);
   return true;
@@ -206,11 +203,47 @@ export async function upsertMeta(rows: MetaRow[], persist = true): Promise<void>
   metaPersistTimer = setTimeout(() => void persistMeta(), 1500);
 }
 
-export async function persistMeta() {
-  // Stored as plain rows (structured clone) — robust across engine versions.
-  const rows = await query<MetaRow>(`SELECT * FROM meta`);
-  const clean = rows.map((r) => Object.fromEntries(Object.entries(r).filter(([, v]) => v != null)) as MetaRow);
-  await kv.set('meta_rows', clean);
+// Saves are coalesced: callers during a running save wait for one more pass that includes their rows.
+let persisting: Promise<void> | null = null;
+let persistAgain = false;
+
+export function persistMeta(): Promise<void> {
+  if (persisting) {
+    persistAgain = true;
+    return persisting;
+  }
+  persisting = (async () => {
+    do {
+      persistAgain = false;
+      await persistMetaNow();
+    } while (persistAgain);
+  })().finally(() => {
+    persisting = null;
+  });
+  return persisting;
+}
+
+/** Stored as Arrow IPC straight from DuckDB: no per-row JS objects or JSON on the main thread (meta holds MBs of lyrics). */
+async function persistMetaNow() {
+  const t = await serial((c) => c.query(`SELECT * FROM meta`));
+  await kv.set(META_IPC_KEY, tableToIPC(t, 'stream'));
+  await kv.del('meta_rows'); // older JSON format
+}
+
+const META_IPC_KEY = 'meta_ipc';
+
+async function restoreMeta() {
+  const ipc = await kv.get<Uint8Array>(META_IPC_KEY);
+  if (ipc?.length) {
+    await insertArrow(tableFromIPC(ipc), 'meta_restore');
+    // BY NAME: columns added to the schema later stay NULL instead of shifting.
+    await exec(`INSERT INTO meta BY NAME SELECT * FROM meta_restore; DROP TABLE meta_restore;`);
+    return;
+  }
+  const metaRows = await kv.get<MetaRow[]>('meta_rows');
+  if (metaRows?.length) {
+    for (let i = 0; i < metaRows.length; i += 3000) await upsertMeta(metaRows.slice(i, i + 3000), false);
+  }
 }
 
 export async function setClusters(list: Array<{ id: number; label: string }>, persist = true) {
