@@ -81,12 +81,14 @@ export function debugBridge(): Plugin {
               return send(200, await ask('idb', { key: url.searchParams.get('key'), store: url.searchParams.get('store') ?? 'kv' }))
             case '/dom':
               return send(200, await ask('dom', { sel: body.sel ?? url.searchParams.get('sel'), limit: url.searchParams.get('limit') ?? 50, chars: url.searchParams.get('chars') ?? 200 }))
+            case '/snapshot':
+              return send(200, await ask('snapshot', null))
             case '/reload':
               return send(200, await ask('reload', null, 5_000))
             case '/navigate':
               return send(200, await ask('navigate', { hash: body.hash ?? url.searchParams.get('hash') }))
             default:
-              return send(404, { error: 'route sconosciuta', routes: ['/ping', '/state', '/logs', '/sql', '/idb', '/navigate', '/reload', '/dom'] })
+              return send(404, { error: 'route sconosciuta', routes: ['/ping', '/state', '/logs', '/sql', '/idb', '/navigate', '/reload', '/dom', '/snapshot'] })
           }
         } catch (e) {
           send(500, { error: e instanceof Error ? e.message : String(e) })

@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { ChevronDown, Download, Wand2, X } from 'lucide-react';
-import { query } from '../../data/db';
+import { loadFacts, yearWhere, type Facts, type MoodDay } from '../../data/facts';
 import { useAsync } from '../../data/useSql';
 import { useRoute, navigate, routes } from '../../lib/router';
 import { useApp } from '../../lib/store';
 import { extractAccent } from '../../lib/color';
-import { DOW_LONG, fmtHours, fmtInt, fmtMonth, fmtPct } from '../../lib/format';
-import { MOOD_HEX, MOOD_SQL, moodLabel, type Mood } from '../../lib/mood';
+import { DOW_LONG, fmtDate, fmtHours, fmtInt, fmtMonth, fmtPct } from '../../lib/format';
+import { getMood, MOOD_HEX, moodLabel } from '../../lib/mood';
 import { storyCaptions } from '../../llm/narrate';
 import { useLlmAvailable } from '../../llm/client';
 import { Button, Spinner } from '../../components/ui';
@@ -15,89 +15,7 @@ import { profileFirstName } from '../../data/account';
 import { StoryButton } from '../../components/StoryButton';
 import { exportStory, type StoryCardSpec } from '../../lib/storyCard';
 
-interface StoryData {
-  /** 0 = all years */
-  year: number;
-  label: string;
-  byYear: Array<{ year: number; minutes: number; artist: string; cover: string | null; track: string }>;
-  minutes: number;
-  days: number;
-  activeDays: number;
-  topMonth: { ym: string; minutes: number } | null;
-  topDay: { day: string; minutes: number } | null;
-  artist: { artist: string; minutes: number; cover: string | null; share: number } | null;
-  artists5: Array<{ artist: string; minutes: number; cover: string | null }>;
-  tracks5: Array<{ uri: string; track: string; artist: string; plays: number; cover: string | null }>;
-  mood: { mood: Mood; share: number } | null;
-  peak: { dow: number; hour: number } | null;
-  skip: number;
-  newArtists: number;
-  newTop: { artist: string; minutes: number } | null;
-  uniqueTracks: number;
-}
-
-async function loadStory(year: number): Promise<StoryData | null> {
-  const all = year === 0;
-  const w = all ? `kind = 'track'` : `kind = 'track' AND year(day) = ${Math.floor(year)}`;
-  const k = await query<{ minutes: number; active: number; skip: number; uniq: number }>(
-    `SELECT sum(minutes) AS minutes, count(DISTINCT day) AS active, avg(skipped::INT) AS skip, count(DISTINCT uri) FILTER (WHERE counted) AS uniq FROM plays WHERE ${w}`,
-  );
-  if (!k[0]?.minutes) return null;
-  const topMonth = await query<{ ym: string; minutes: number }>(`SELECT strftime(day,'%Y-%m') AS ym, sum(minutes) AS minutes FROM plays WHERE ${w} GROUP BY 1 ORDER BY 2 DESC LIMIT 1`);
-  const topDay = await query<{ day: string; minutes: number }>(`SELECT day::VARCHAR AS day, sum(minutes) AS minutes FROM plays WHERE ${w} GROUP BY 1 ORDER BY 2 DESC LIMIT 1`);
-  const artists5 = await query<{ artist: string; minutes: number; cover: string | null }>(`
-    SELECT p.artist, sum(p.minutes) AS minutes, arg_max(m.cover, p.minutes) FILTER (WHERE m.cover <> '') AS cover
-    FROM plays p LEFT JOIN meta m USING (uri) WHERE ${w.replace(/kind/g, 'p.kind').replace('year(day)', 'year(p.day)')} GROUP BY 1 ORDER BY 2 DESC LIMIT 5`);
-  const tracks5 = await query<{ uri: string; track: string; artist: string; plays: number; cover: string | null }>(`
-    SELECT p.uri, any_value(p.track) AS track, any_value(p.artist) AS artist, count(*) FILTER (WHERE p.counted) AS plays, any_value(m.cover) AS cover
-    FROM plays p LEFT JOIN meta m USING (uri) WHERE ${w.replace(/kind/g, 'p.kind').replace('year(day)', 'year(p.day)')} GROUP BY 1 ORDER BY plays DESC LIMIT 5`);
-  const mood = await query<{ mood: Mood; minutes: number; total: number }>(`
-    WITH x AS (SELECT ${MOOD_SQL('m.valence', 'm.energy')} mood, sum(p.minutes) AS minutes FROM plays p LEFT JOIN meta m USING (uri)
-               WHERE ${w.replace(/kind/g, 'p.kind').replace('year(day)', 'year(p.day)')} GROUP BY 1)
-    SELECT mood, minutes, (SELECT sum(minutes) FROM x WHERE mood <> 'sconosciuto') AS total FROM x WHERE mood <> 'sconosciuto' ORDER BY minutes DESC LIMIT 1`);
-  const peak = await query<{ dow: number; hour: number }>(`SELECT dow, hour FROM plays WHERE ${w} GROUP BY ALL ORDER BY sum(minutes) DESC LIMIT 1`);
-  const newA = await query<{ n: number }>(`
-    WITH f AS (SELECT artist, min(day) AS first_d FROM plays WHERE kind='track' AND counted GROUP BY artist)
-    SELECT count(*) AS n FROM f ${all ? '' : `WHERE year(first_d) = ${Math.floor(year)}`}`);
-  const newTop = all ? [] : await query<{ artist: string; minutes: number }>(`
-    WITH f AS (SELECT artist, min(day) AS first_d FROM plays WHERE kind='track' AND counted GROUP BY artist)
-    SELECT p.artist, sum(p.minutes) AS minutes FROM plays p JOIN f USING (artist)
-    WHERE year(f.first_d) = ${Math.floor(year)} AND ${w.replace(/kind/g, 'p.kind').replace('year(day)', 'year(p.day)')} GROUP BY 1 ORDER BY 2 DESC LIMIT 1`);
-  const isLeap = (y: number) => (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0;
-  const span = await query<{ days: number }>(`SELECT date_diff('day', min(day), max(day)) + 1 AS days FROM plays WHERE ${w}`);
-  const byYear = all
-    ? await query<{ year: number; minutes: number; artist: string; cover: string | null; track: string }>(`
-        WITH y AS (
-          SELECT year(p.day) AS year, p.artist, p.track, p.minutes, m.cover FROM plays p LEFT JOIN meta m USING (uri) WHERE p.kind = 'track'),
-        a AS (SELECT year, artist, sum(minutes) AS m, arg_max(cover, minutes) FILTER (WHERE cover <> '') AS cover FROM y GROUP BY ALL),
-        t AS (SELECT year, track, artist, sum(minutes) AS m FROM y GROUP BY ALL)
-        SELECT tot.year, tot.minutes, ta.artist, ta.cover, tt.track || ' — ' || tt.artist AS track
-        FROM (SELECT year, sum(minutes) AS minutes FROM y GROUP BY year) tot
-        JOIN (SELECT * FROM a QUALIFY row_number() OVER (PARTITION BY year ORDER BY m DESC) = 1) ta USING (year)
-        JOIN (SELECT * FROM t QUALIFY row_number() OVER (PARTITION BY year ORDER BY m DESC) = 1) tt USING (year)
-        ORDER BY tot.year`)
-    : [];
-  const total = k[0].minutes;
-  return {
-    year,
-    label: all ? 'tutti gli anni' : String(year),
-    byYear,
-    minutes: total,
-    days: all ? span[0]?.days ?? 0 : isLeap(year) ? 366 : 365,
-    activeDays: k[0].active,
-    topMonth: topMonth[0] ?? null,
-    topDay: topDay[0] ?? null,
-    artist: artists5[0] ? { ...artists5[0], share: artists5[0].minutes / total } : null,
-    artists5,
-    tracks5,
-    mood: mood[0] && mood[0].total ? { mood: mood[0].mood, share: mood[0].minutes / mood[0].total } : null,
-    peak: peak[0] ?? null,
-    skip: k[0].skip,
-    newArtists: newA[0]?.n ?? 0,
-    newTop: newTop[0] ?? null,
-    uniqueTracks: k[0].uniq,
-  };
-}
+type StoryData = Facts;
 
 function defaultCaptions(d: StoryData): Record<string, string> {
   return {
@@ -106,12 +24,21 @@ function defaultCaptions(d: StoryData): Record<string, string> {
     artist: d.artist ? `${d.artist.artist} si è preso il ${fmtPct(d.artist.share)} del tuo tempo.` : '',
     track: d.tracks5[0] ? `“${d.tracks5[0].track}” è il brano che hai fatto ripartire più volte.` : '',
     mood: d.mood ? `Il tuo anno ha suonato soprattutto ${moodLabel(d.mood.mood).toLowerCase()}.` : 'Arricchisci il mood per scoprire che suono ha avuto il tuo anno.',
-    habits: d.peak ? `Il tuo momento: ${DOW_LONG[d.peak.dow - 1]} verso le ${d.peak.hour}.` : '',
+    habits: d.peak
+      ? `Il tuo momento: ${DOW_LONG[d.peak.dow - 1]} verso le ${d.peak.hour}.${d.night && d.night.share >= 0.05 ? ` E il ${fmtPct(d.night.share)} lo ascolti dopo mezzanotte.` : ''}`
+      : '',
+    days:
+      d.happyDay && d.sadDay
+        ? `Il ${fmtDate(d.happyDay.day)} sorridevi con ${d.happyDay.tracks[0]?.artist ?? 'la tua musica'}; il ${fmtDate(d.sadDay.day)} cercavi conforto in ${d.sadDay.tracks[0]?.artist ?? 'altro'}.`
+        : 'Arricchisci il mood per scoprire i tuoi giorni più felici e più tristi.',
+    records: d.streak
+      ? `${fmtInt(d.streak.days)} giorni di fila senza mai spegnere la musica${d.obsession ? `, e un giorno “${d.obsession.track}” l’hai messa ${fmtInt(d.obsession.n)} volte` : ''}.`
+      : '',
     outro: `${fmtInt(d.uniqueTracks)} brani diversi, ${fmtInt(d.newArtists)} artisti ${d.year ? "scoperti" : "in tutto"}. Alla prossima.`,
   };
 }
 
-type StoryKey = 'summary' | 'intro' | 'time' | 'years' | 'artist' | 'track' | 'mood' | 'habits';
+type StoryKey = 'summary' | 'intro' | 'time' | 'years' | 'artist' | 'track' | 'mood' | 'days' | 'records' | 'habits';
 
 function storySpec(d: StoryData, key: StoryKey, cap: Record<string, string>): StoryCardSpec {
   const kicker = d.year ? `Il mio ${d.year} in musica` : 'Tutta la mia musica';
@@ -177,6 +104,34 @@ function storySpec(d: StoryData, key: StoryKey, cap: Record<string, string>): St
         note: cap.mood,
         filename,
       };
+    case 'days':
+      return {
+        kicker: `${kicker} · giorni`,
+        title: 'Il giorno più felice',
+        subtitle: d.happyDay ? fmtDate(d.happyDay.day) : undefined,
+        image: d.happyDay?.tracks[0]?.cover ?? null,
+        accent: MOOD_HEX.euforico,
+        sections: [
+          ...(d.happyDay ? [{ title: `Felice · ${fmtDate(d.happyDay.day)}`, rows: d.happyDay.tracks.slice(0, 3).map((t) => ({ label: t.track, sub: t.artist, image: t.cover })) }] : []),
+          ...(d.sadDay ? [{ title: `Triste · ${fmtDate(d.sadDay.day)}`, rows: d.sadDay.tracks.slice(0, 3).map((t) => ({ label: t.track, sub: t.artist, image: t.cover })) }] : []),
+        ],
+        note: cap.days,
+        filename,
+      };
+    case 'records':
+      return {
+        kicker: `${kicker} · record`,
+        title: 'I miei record',
+        hero: d.streak ? { value: fmtInt(d.streak.days), unit: 'giorni di fila con musica' } : undefined,
+        stats: [
+          ...(d.marathon ? [{ label: 'Maratona', value: fmtHours(d.marathon.minutes) }] : []),
+          ...(d.obsession ? [{ label: 'Ossessione', value: `${fmtInt(d.obsession.n)}× ${d.obsession.track}` }] : []),
+          ...(d.comeback ? [{ label: 'Ritorno', value: d.comeback.track }] : []),
+        ],
+        note: cap.records,
+        accentFrom: d.obsession?.cover ?? d.artist?.cover,
+        filename,
+      };
     case 'habits':
       return {
         kicker: `${kicker} · abitudini`,
@@ -240,7 +195,7 @@ export default function StoryPage() {
   const lastYear = bounds ? Number(bounds.max.slice(0, 4)) : new Date().getFullYear();
   const firstYear = bounds ? Number(bounds.min.slice(0, 4)) : lastYear;
   const year = qs.get('year') === 'all' ? 0 : Number(qs.get('year')) || lastYear;
-  const story = useAsync(() => loadStory(year), [year]);
+  const story = useAsync(() => loadFacts(yearWhere(year), year), [year]);
   const ai = useLlmAvailable();
   const firstName = profileFirstName(useApp((s) => s.profile));
   const [captions, setCaptions] = useState<Record<string, string> | null>(null);
@@ -401,6 +356,21 @@ export default function StoryPage() {
                       artisti_nuovi: d.newArtists,
                       scoperta_top: d.newTop?.artist ?? '',
                       brani_diversi: d.uniqueTracks,
+                      giorno_piu_felice: d.happyDay ? `${fmtDate(d.happyDay.day)}: ${d.happyDay.tracks.map((t) => `${t.track} di ${t.artist}`).join(', ')}` : '',
+                      giorno_piu_triste: d.sadDay ? `${fmtDate(d.sadDay.day)}: ${d.sadDay.tracks.map((t) => `${t.track} di ${t.artist}`).join(', ')}` : '',
+                      giorno_piu_carico: d.wildDay ? `${fmtDate(d.wildDay.day)}: ${d.wildDay.tracks.map((t) => t.artist).join(', ')}` : '',
+                      brano_piu_allegro: d.happyTrack ? `${d.happyTrack.track} di ${d.happyTrack.artist}` : '',
+                      brano_piu_triste: d.sadTrack ? `${d.sadTrack.track} di ${d.sadTrack.artist}` : '',
+                      mix_mood: d.moodMix.map((m) => `${moodLabel(m.mood)} ${fmtPct(m.share)}`).join(', '),
+                      serie_giorni_consecutivi: d.streak?.days ?? 0,
+                      maratona_ore: d.marathon ? Math.round(d.marathon.minutes / 6) / 10 : 0,
+                      ossessione: d.obsession ? `${d.obsession.track} di ${d.obsession.artist}, ${d.obsession.n} volte il ${fmtDate(d.obsession.day)}` : '',
+                      ritorno_di_fiamma: d.comeback ? `${d.comeback.track} di ${d.comeback.artist} dopo ${d.comeback.gap} giorni` : '',
+                      quota_notturna: d.night ? fmtPct(d.night.share) : '',
+                      brano_notturno: d.night?.track ? `${d.night.track} di ${d.night.artist}` : '',
+                      quota_weekend: fmtPct(d.weekendShare),
+                      primo_brano: d.firstTrack ? `${d.firstTrack.track} di ${d.firstTrack.artist}` : '',
+                      ultimo_brano: d.lastTrack ? `${d.lastTrack.track} di ${d.lastTrack.artist}` : '',
                     }),
                   );
                 } catch (e) {
@@ -546,8 +516,48 @@ export default function StoryPage() {
               <div className="display text-6xl text-text-faint">Mood sconosciuto</div>
             )}
             {d.mood && <div className="num mt-3 text-xl text-text-muted">{fmtPct(d.mood.share)} del tempo con mood noto</div>}
+            {d.moodMix.length > 1 && <MoodMix mix={d.moodMix} />}
             <p className="mt-10 max-w-xl text-2xl text-text-muted">{cap.mood}</p>
+            {(d.happyTrack || d.sadTrack) && (
+              <div className="mt-8 flex flex-wrap gap-6 text-text-muted">
+                {d.happyTrack && <TrackChip label="Il più solare tra i tuoi preferiti" t={d.happyTrack} color={MOOD_HEX.euforico} />}
+                {d.sadTrack && <TrackChip label="Il più cupo" t={d.sadTrack} color={MOOD_HEX.malinconico} />}
+              </div>
+            )}
           </Chapter>
+
+          {(d.happyDay || d.sadDay) && (
+            <Chapter kicker="Giorni felici, giorni tristi" accentFrom={d.happyDay?.tracks[0]?.cover} story={() => storySpec(d, 'days', cap)}>
+              <div className="grid gap-6 md:grid-cols-2">
+                {d.happyDay && <DayCard title="Il giorno più felice" day={d.happyDay} color={MOOD_HEX.euforico} />}
+                {d.sadDay && <DayCard title="Il giorno più triste" day={d.sadDay} color={MOOD_HEX.malinconico} />}
+                {d.wildDay && <DayCard title="Il giorno più carico" day={d.wildDay} color={MOOD_HEX.arrabbiato} compact />}
+                {d.calmDay && <DayCard title="Il giorno più calmo" day={d.calmDay} color={MOOD_HEX.sereno} compact />}
+              </div>
+              <p className="mt-10 max-w-2xl text-2xl text-text-muted">{cap.days}</p>
+              <p className="mt-2 text-xs text-text-faint">Media pesata sul tempo della positività (valence) e dell’energia dei brani; solo giorni con almeno 45 minuti di mood noto.</p>
+            </Chapter>
+          )}
+
+          {(d.streak || d.marathon || d.obsession) && (
+            <Chapter kicker="Record" accentFrom={d.obsession?.cover} story={() => storySpec(d, 'records', cap)}>
+              <div className="grid gap-x-10 gap-y-12 md:grid-cols-2">
+                {d.streak && (
+                  <Fact value={fmtInt(d.streak.days)} unit="giorni di fila" sub={`dal ${fmtDate(d.streak.from)} al ${fmtDate(d.streak.to)}, mai un giorno senza musica`} />
+                )}
+                {d.marathon && (
+                  <Fact value={fmtHours(d.marathon.minutes)} unit="di maratona" sub={`${fmtInt(d.marathon.tracks)} brani senza pause, iniziata il ${fmtDate(d.marathon.start)} alle ${d.marathon.start.slice(11, 16)}`} />
+                )}
+                {d.obsession && (
+                  <Fact value={`${fmtInt(d.obsession.n)}×`} unit={`“${d.obsession.track}”`} sub={`${d.obsession.artist}, tutte il ${fmtDate(d.obsession.day)}`} cover={d.obsession.cover} />
+                )}
+                {d.comeback && (
+                  <Fact value={fmtInt(d.comeback.gap)} unit="giorni dopo" sub={`“${d.comeback.track}” di ${d.comeback.artist} è tornato nei tuoi ascolti il ${fmtDate(d.comeback.day)}`} cover={d.comeback.cover} />
+                )}
+              </div>
+              <p className="mt-10 max-w-xl text-2xl text-text-muted">{cap.records}</p>
+            </Chapter>
+          )}
 
           <Chapter kicker="Abitudini" story={() => storySpec(d, 'habits', cap)}>
             <div className="grid gap-10 md:grid-cols-3">
@@ -565,12 +575,32 @@ export default function StoryPage() {
                 <div className="num text-6xl">{fmtInt(d.newArtists)}</div>
                 <div className="text-text-muted">{d.year ? 'artisti scoperti' : 'artisti ascoltati'}{d.newTop ? `, il primo: ${d.newTop.artist}` : ''}</div>
               </div>
+              {d.night && (
+                <div>
+                  <div className="num text-6xl">{fmtPct(d.night.share)}</div>
+                  <div className="text-text-muted">dopo mezzanotte{d.night.track ? `, soprattutto “${d.night.track}”` : ''}</div>
+                </div>
+              )}
+              <div>
+                <div className="num text-6xl">{fmtPct(d.weekendShare)}</div>
+                <div className="text-text-muted">nel weekend</div>
+              </div>
+              <div>
+                <div className="num text-6xl">{fmtPct(d.shuffle)}</div>
+                <div className="text-text-muted">in riproduzione casuale</div>
+              </div>
             </div>
             <p className="mt-10 max-w-xl text-2xl text-text-muted">{cap.habits}</p>
           </Chapter>
 
           <Chapter kicker="Fine">
             <div className="display text-[clamp(3rem,8vw,6rem)] leading-none">{cap.outro}</div>
+            {d.firstTrack && d.lastTrack && (
+              <p className="mt-6 max-w-2xl text-xl text-text-muted">
+                Hai iniziato con “{d.firstTrack.track}” di {d.firstTrack.artist} ({fmtDate(d.firstTrack.day)}) e chiuso con “{d.lastTrack.track}” di {d.lastTrack.artist} (
+                {fmtDate(d.lastTrack.day)}).
+              </p>
+            )}
             <div className="mt-10 flex flex-wrap gap-3">
               <Button variant="primary" onClick={() => void shareCard(d)}>
                 <Download size={16} /> Scarica l’immagine da condividere
@@ -582,6 +612,83 @@ export default function StoryPage() {
           </Chapter>
         </>
       )}
+    </div>
+  );
+}
+
+function MoodMix({ mix }: { mix: Facts['moodMix'] }) {
+  return (
+    <div className="mt-8 max-w-3xl">
+      <div className="flex h-3 overflow-hidden rounded-full">
+        {mix.map((m) => (
+          <div key={m.mood} style={{ width: `${m.share * 100}%`, background: MOOD_HEX[m.mood] }} title={`${moodLabel(m.mood)} ${fmtPct(m.share)}`} />
+        ))}
+      </div>
+      <div className="mt-3 flex flex-wrap gap-x-5 gap-y-1 text-sm text-text-muted">
+        {mix.map((m) => (
+          <span key={m.mood} className="flex items-center gap-1.5">
+            <span className="size-2 rounded-full" style={{ background: MOOD_HEX[m.mood] }} />
+            {moodLabel(m.mood)} <span className="num text-text-faint">{fmtPct(m.share)}</span>
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function TrackChip({ label, t, color }: { label: string; t: { track: string; artist: string; cover: string | null }; color: string }) {
+  return (
+    <div className="flex items-center gap-3">
+      <Cover src={t.cover} name={t.track} size={48} />
+      <div className="min-w-0">
+        <div className="text-xs uppercase tracking-[0.12em]" style={{ color }}>{label}</div>
+        <div className="truncate text-text">{t.track}</div>
+        <div className="truncate text-sm">{t.artist}</div>
+      </div>
+    </div>
+  );
+}
+
+function DayCard({ title, day, color, compact = false }: { title: string; day: MoodDay; color: string; compact?: boolean }) {
+  const mood = getMood(day.valence, day.energy);
+  return (
+    <div className="rounded-2xl border border-border bg-surface-1/70 p-5" style={{ boxShadow: `inset 3px 0 0 ${color}` }}>
+      <div className="text-xs font-medium uppercase tracking-[0.14em]" style={{ color }}>{title}</div>
+      <div className={`display mt-1 ${compact ? 'text-3xl' : 'text-5xl'}`}>{fmtDate(day.day)}</div>
+      <div className="num mt-1 text-sm text-text-muted">
+        {fmtHours(day.minutes)} · positività {Math.round(day.valence * 100)}/100{day.energy != null ? ` · energia ${Math.round(day.energy * 100)}/100` : ''} · {moodLabel(mood).toLowerCase()}
+      </div>
+      {!compact && (
+        <ol className="mt-4 flex flex-col gap-2">
+          {day.tracks.slice(0, 4).map((t) => (
+            <li key={t.track + t.artist} className="flex items-center gap-3">
+              <Cover src={t.cover} name={t.track} size={36} />
+              <div className="min-w-0">
+                <div className="truncate">{t.track}</div>
+                <div className="truncate text-xs text-text-faint">
+                  {t.artist} · {fmtInt(t.n)}×
+                </div>
+              </div>
+            </li>
+          ))}
+        </ol>
+      )}
+      {compact && day.tracks[0] && <div className="mt-2 truncate text-sm text-text-muted">soprattutto {day.tracks.slice(0, 3).map((t) => t.artist).filter((a, i, all) => all.indexOf(a) === i).join(', ')}</div>}
+    </div>
+  );
+}
+
+function Fact({ value, unit, sub, cover }: { value: string; unit: string; sub: string; cover?: string | null }) {
+  return (
+    <div className="flex items-start gap-4">
+      {cover !== undefined && <Cover src={cover} name={unit} size={64} className="mt-2" />}
+      <div className="min-w-0">
+        <div className="flex flex-wrap items-baseline gap-x-3">
+          <span className="num text-6xl">{value}</span>
+          <span className="display text-2xl">{unit}</span>
+        </div>
+        <div className="mt-1 text-text-muted">{sub}</div>
+      </div>
     </div>
   );
 }

@@ -26,7 +26,7 @@ const READ_ONLY = /^\s*(select|with|describe|summarize|show|pragma|explain|from)
 async function handle(op: string, payload: Record<string, unknown> | null): Promise<unknown> {
   switch (op) {
     case 'ping':
-      return { ok: true, url: location.href, title: document.title, status: useApp.getState().status, visible: document.visibilityState };
+      return { ok: true, url: location.href, title: document.title, status: useApp.getState().status, visible: document.visibilityState, ua: navigator.userAgent, viewport: [innerWidth, innerHeight], dpr: devicePixelRatio };
     case 'state': {
       const { profile, ...rest } = useApp.getState();
       return truncate({
@@ -64,6 +64,12 @@ async function handle(op: string, payload: Record<string, unknown> | null): Prom
           return { tag: e.tagName.toLowerCase(), id: e.id || undefined, cls: e.className?.toString().slice(0, 80), w: Math.round(r.width), h: Math.round(r.height), text: (e.innerText ?? '').replace(/\s+/g, ' ').slice(0, Number(payload?.chars ?? 200)) };
         }),
       };
+    }
+    case 'snapshot': {
+      // Rendered page without scripts: lets local tools print/screenshot exactly what the tab shows (e.g. the PDF report).
+      const doc = document.documentElement.cloneNode(true) as HTMLElement;
+      doc.querySelectorAll('script').forEach((s) => s.remove());
+      return { url: location.href, html: '<!doctype html>' + doc.outerHTML };
     }
     case 'reload':
       setTimeout(() => location.reload(), 100);

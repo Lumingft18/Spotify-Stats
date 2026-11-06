@@ -4,6 +4,8 @@ export const SESSION_GAP_MINUTES = 30;
 
 /** Builds `plays` and `tracks` from `plays_raw` (normalized columns, timestamps as VARCHAR). */
 export const BUILD_SQL = /* sql */ `
+-- Tracks the user removed from the whole app (filled from IndexedDB before this runs).
+CREATE TABLE IF NOT EXISTS excluded (uri VARCHAR, track VARCHAR, artist VARCHAR);
 CREATE OR REPLACE TABLE plays AS
 WITH base AS (
   SELECT
@@ -18,6 +20,7 @@ WITH base AS (
     conn_country AS country, reason_start, reason_end,
     shuffle, skipped, offline, incognito
   FROM plays_raw
+  WHERE coalesce(track_uri, 'local:' || artist || ' — ' || track) NOT IN (SELECT uri FROM excluded)
 ),
 gaps AS (
   SELECT *,

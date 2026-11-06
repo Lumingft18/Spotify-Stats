@@ -1,4 +1,4 @@
-import { exec, loadPlays, query, setFilter, upsertMeta } from './db';
+import { exec, getExcluded, loadPlays, query, setExcluded, setFilter, upsertMeta, type ExcludedTrack } from './db';
 import { clearIndexCache } from '../ml/embeddings';
 import { parseExport } from './import';
 import { emptyProfile, type AccountProfile } from './account';
@@ -105,4 +105,29 @@ export async function setProfileName(name: string) {
   p.displayName = name.trim() || null;
   await idb.set('profile', p);
   getApp().set({ profile: p });
+}
+
+async function applyExcluded(list: ExcludedTrack[]) {
+  await setExcluded(list);
+  const { from, to } = getApp().range;
+  await setFilter(from, to);
+  const b = await query<{ min: string; max: string }>(`SELECT min(day)::VARCHAR AS min, max(day)::VARCHAR AS max FROM plays WHERE kind = 'track'`);
+  getApp().set({ bounds: b[0] ?? null });
+  getApp().bump();
+}
+
+/** Removes a track from the whole app (every stat, chart, story, report, model). Reversible from Impostazioni. */
+export async function excludeTrack(t: ExcludedTrack) {
+  const list = await getExcluded();
+  if (list.some((e) => e.uri === t.uri)) return;
+  await applyExcluded([...list, t]);
+}
+
+export async function includeTrack(uri: string) {
+  const list = await getExcluded();
+  await applyExcluded(list.filter((e) => e.uri !== uri));
+}
+
+export async function includeAll() {
+  await applyExcluded([]);
 }

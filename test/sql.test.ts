@@ -55,6 +55,44 @@ describe.skipIf(!enabled)('SQL on a real export', () => {
     expect(w.length).toBe(1);
   });
 
+  it('story/report facts (all years, one year, date range)', async () => {
+    const f = await import('../src/data/facts');
+    const all = await f.loadFacts(f.yearWhere(0), 0);
+    expect(all!.minutes).toBeGreaterThan(0);
+    expect(all!.byYear.length).toBeGreaterThan(0);
+    expect(all!.streak!.days).toBeGreaterThan(0);
+    expect(all!.marathon!.minutes).toBeGreaterThan(0);
+    expect(all!.happyDay).not.toBeNull();
+    expect(all!.happyDay!.valence).toBeGreaterThanOrEqual(all!.sadDay?.valence ?? 0);
+    expect(all!.happyDay!.tracks.length).toBeGreaterThan(0);
+    expect(all!.moodMix.reduce((s, m) => s + m.share, 0)).toBeCloseTo(1, 5);
+    const y = Number(all!.lastDay.slice(0, 4));
+    const one = await f.loadFacts(f.yearWhere(y), y);
+    expect(one!.minutes).toBeLessThanOrEqual(all!.minutes);
+    const r = await f.loadFacts(f.rangeWhere(`${y}-01-01`, `${y}-12-31`), 0);
+    expect(r!.minutes).toBeCloseTo(one!.minutes, 3);
+  });
+
+  it('excluded tracks vanish from every derived table', async () => {
+    const { BUILD_SQL, filterViewSql } = await import('../src/data/schema');
+    const [top] = await engine.query<{ uri: string; plays: number }>(`SELECT uri, plays FROM tracks ORDER BY minutes DESC LIMIT 1`);
+    const before = await engine.query<{ n: number }>(`SELECT count(*) AS n FROM plays`);
+    await engine.exec(`DELETE FROM excluded; INSERT INTO excluded VALUES ('${top.uri}', 'x', 'y')`);
+    await engine.exec(BUILD_SQL);
+    await engine.exec(filterViewSql(null, null));
+    for (const t of ['plays', 'tracks', 'p']) {
+      const [r] = await engine.query<{ n: number }>(`SELECT count(*) AS n FROM ${t} WHERE uri = ?`, [top.uri]);
+      expect(r.n).toBe(0);
+    }
+    const [after] = await engine.query<{ n: number }>(`SELECT count(*) AS n FROM plays`);
+    expect(after.n).toBeLessThan(before[0].n);
+    await engine.exec(`DELETE FROM excluded`);
+    await engine.exec(BUILD_SQL);
+    await engine.exec(filterViewSql(null, null));
+    const [back] = await engine.query<{ n: number }>(`SELECT count(*) AS n FROM plays`);
+    expect(back.n).toBe(before[0].n);
+  });
+
   it('filter view by period', async () => {
     const { filterViewSql } = await import('../src/data/schema');
     await engine.exec(filterViewSql('2024-01-01', '2024-03-31'));

@@ -1,11 +1,11 @@
 import { useRef, useState } from 'react';
-import { ShieldCheck, Trash2, Upload, Globe, KeyRound, Clock, Save, CheckCircle2 } from 'lucide-react';
+import { EyeOff, RotateCcw, ShieldCheck, Trash2, Upload, Globe, KeyRound, Clock, Save, CheckCircle2 } from 'lucide-react';
 import { checkOpenRouterKey } from '../../llm/client';
 import { catalogSize, clearCatalog } from '../../lib/catalogCache';
 import { useAsync } from '../../data/useSql';
 import { ENV_KEYS, useApp, type ConnectionId } from '../../lib/store';
-import { query, loadPlays, wipeAll } from '../../data/db';
-import { afterDataLoaded, importFiles } from '../../data/lifecycle';
+import { getExcluded, query, loadPlays, wipeAll } from '../../data/db';
+import { afterDataLoaded, importFiles, includeAll, includeTrack } from '../../data/lifecycle';
 import { emptyColumns, makeLocalizer, PLAY_COLUMNS, type PlayColumns } from '../../data/normalize';
 import { resetTried, runAllEnabled, stopAll } from '../../enrichment/jobs';
 import { autoMoodAi, MOOD_AI_JOB, stopMoodAi } from '../../enrichment/moodAi';
@@ -397,6 +397,10 @@ export default function SettingsPage() {
         </Card>
       </Section>
 
+      <Section kicker="Esclusi" title="Brani tolti da tutte le statistiche">
+        <ExcludedList />
+      </Section>
+
       <Section kicker="Cache" title="Copertine e audio features salvate in locale">
         <CatalogCard />
       </Section>
@@ -422,5 +426,51 @@ export default function SettingsPage() {
         </Card>
       </Section>
     </div>
+  );
+}
+
+function ExcludedList() {
+  const list = useAsync(() => getExcluded(), []);
+  const [busy, setBusy] = useState(false);
+  const rows = list.value ?? [];
+  const run = async (fn: () => Promise<void>) => {
+    setBusy(true);
+    try {
+      await fn();
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Card className="flex flex-col gap-3">
+      <p className="text-sm text-text-muted">
+        Un brano escluso sparisce da classifiche, grafici, mood, racconto, modelli e PDF, come se non l’avessi mai ascoltato. Escludi dalla pagina del brano o passando sopra una riga
+        nelle classifiche (<EyeOff size={12} className="inline" />).
+      </p>
+      {rows.length === 0 ? (
+        <div className="text-sm text-text-faint">Nessun brano escluso.</div>
+      ) : (
+        <>
+          <ul className="flex flex-col divide-y divide-border">
+            {rows.map((e) => (
+              <li key={e.uri} className="flex items-center justify-between gap-3 py-2">
+                <div className="min-w-0">
+                  <div className="truncate font-medium">{e.track}</div>
+                  <div className="truncate text-xs text-text-faint">{e.artist}</div>
+                </div>
+                <Button size="sm" variant="ghost" disabled={busy} onClick={() => run(() => includeTrack(e.uri))}>
+                  <RotateCcw size={14} /> Ripristina
+                </Button>
+              </li>
+            ))}
+          </ul>
+          {rows.length > 1 && (
+            <Button size="sm" className="self-start" disabled={busy} onClick={() => run(includeAll)}>
+              Ripristina tutti ({rows.length})
+            </Button>
+          )}
+        </>
+      )}
+    </Card>
   );
 }

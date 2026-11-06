@@ -53,4 +53,5 @@ curl -s -X POST localhost:5173/__debug/sql -d '{"sql":"SELECT mood_source, count
 curl -s -X POST localhost:5173/__debug/navigate -d '{"hash":"#/mood"}'
 curl -s localhost:5173/__debug/reload         # ricarica la pagina
 curl -s 'localhost:5173/__debug/dom?sel=h1'   # elementi: dimensioni + testo
+curl -s localhost:5173/__debug/snapshot       # HTML renderizzato senza script (per stampare/screenshot in locale)
 ```

@@ -1,4 +1,6 @@
+import { EyeOff } from 'lucide-react';
 import { Cover } from './Cover';
+import { excludeTrack } from '../data/lifecycle';
 import { Meter, cx } from './ui';
 import { fmtHours, fmtInt, fmtPct } from '../lib/format';
 import { routes } from '../lib/router';
@@ -27,7 +29,7 @@ export function EntityList({
   return (
     <ol className="flex flex-col">
       {rows.map((r, i) => (
-        <li key={`${r.label}-${r.artist}-${i}`}>
+        <li key={`${r.label}-${r.artist}-${i}`} className="group/row relative">
           <a
             href={entityHref(kind, r)}
             className="group grid grid-cols-[2rem_auto_1fr_auto] items-center gap-3 rounded-xl px-2 py-2 transition-colors hover:bg-surface-2/70 md:grid-cols-[2.25rem_auto_1fr_10rem_6rem]"
@@ -49,6 +51,17 @@ export function EntityList({
               <div className="num text-[11px] text-text-faint">{metric === 'plays' ? fmtHours(r.minutes) : `${fmtInt(r.plays)} ascolti`}</div>
             </div>
           </a>
+          {kind === 'tracks' && r.uri && (
+            <button
+              type="button"
+              title={`Escludi “${r.label}” da tutto`}
+              aria-label={`Escludi ${r.label} da tutte le statistiche`}
+              onClick={() => void excludeTrack({ uri: r.uri!, track: r.label, artist: r.artist })}
+              className="no-print absolute left-1 top-1/2 grid size-7 -translate-y-1/2 place-items-center rounded-lg bg-surface-2 text-text-faint opacity-0 transition-opacity hover:text-bad focus-visible:opacity-100 group-hover/row:opacity-100"
+            >
+              <EyeOff size={14} />
+            </button>
+          )}
         </li>
       ))}
     </ol>

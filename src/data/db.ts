@@ -108,7 +108,31 @@ async function insertArrow(table: Table, name: string) {
   });
 }
 
+export interface ExcludedTrack {
+  uri: string;
+  track: string;
+  artist: string;
+}
+const EXCLUDED_KEY = 'excluded';
+
+export async function getExcluded(): Promise<ExcludedTrack[]> {
+  return (await idb.get<ExcludedTrack[]>(EXCLUDED_KEY)) ?? [];
+}
+
+async function writeExcludedTable(list: ExcludedTrack[]) {
+  await exec(`CREATE OR REPLACE TABLE excluded (uri VARCHAR, track VARCHAR, artist VARCHAR)`);
+  for (const e of list) await query(`INSERT INTO excluded VALUES (?, ?, ?)`, [e.uri, e.track ?? '', e.artist ?? '']);
+}
+
+/** Saves the exclusion list and rebuilds every derived table without those tracks (filter view is reset by the caller). */
+export async function setExcluded(list: ExcludedTrack[]): Promise<void> {
+  await idb.set(EXCLUDED_KEY, list);
+  await writeExcludedTable(list);
+  await exec(BUILD_SQL);
+}
+
 async function buildDerived() {
+  await writeExcludedTable(await getExcluded());
   await exec(BUILD_SQL);
   await exec(META_SQL);
   await exec(`CREATE TABLE IF NOT EXISTS clusters (id INTEGER, label VARCHAR)`);

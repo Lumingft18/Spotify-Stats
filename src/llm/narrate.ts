@@ -79,10 +79,11 @@ export async function nameErasWithLLM(eras: Era[]): Promise<Record<string, strin
 }
 
 export async function storyCaptions(facts: Record<string, string | number>): Promise<Record<string, string>> {
-  const keys = ['intro', 'time', 'artist', 'track', 'mood', 'habits', 'outro'];
+  const keys = ['intro', 'time', 'artist', 'track', 'mood', 'days', 'records', 'habits', 'outro'];
   const res = await structured<Record<string, string>>({
     model: getApp().settings.llmModelAgent,
     system: `Scrivi didascalie brevi (max 22 parole ciascuna), in italiano, seconda persona, tono caldo e ironico ma mai banale, per un racconto annuale degli ascolti musicali.
+Chiavi: intro (ore totali), time (ritmo/mese top), artist, track, mood (suono prevalente e mix), days (giorno più felice vs più triste: cita i brani), records (serie di giorni, maratona, ossessione, ritorno di fiamma), habits (momento, notte, weekend), outro (chiusura, può citare primo e ultimo brano).
 Usa SOLO i fatti forniti; non inventare numeri, artisti o brani. Puoi omettere numeri. Niente emoji.`,
     user: JSON.stringify(facts),
     schemaName: 'story',

@@ -1,7 +1,8 @@
 import { useState } from 'react';
-import { ExternalLink, Play } from 'lucide-react';
+import { EyeOff, ExternalLink, Play, RotateCcw } from 'lucide-react';
 import { useSql, useSqlOne, useAsync } from '../../data/useSql';
-import { query } from '../../data/db';
+import { getExcluded, query } from '../../data/db';
+import { excludeTrack, includeTrack } from '../../data/lifecycle';
 import { useAccentFrom } from '../../lib/color';
 import { fmtDate, fmtHours, fmtInt, fmtPct } from '../../lib/format';
 import { getMood, moodLabel, MOOD_HEX } from '../../lib/mood';
@@ -73,6 +74,26 @@ export default function TrackPage({ uri }: { uri: string }) {
   const id = spotifyId(uri);
   const range = useApp((st) => st.range);
 
+  const excluded = useAsync(async () => (await getExcluded()).find((e) => e.uri === uri) ?? null, [uri]);
+  const [busy, setBusy] = useState(false);
+
+  if (excluded.value)
+    return (
+      <Empty title={`“${excluded.value.track}” è escluso`} icon={<EyeOff size={22} />}>
+        <p>{excluded.value.artist} · non compare in nessuna statistica, grafico, racconto o PDF.</p>
+        <Button
+          size="sm"
+          className="mt-4"
+          disabled={busy}
+          onClick={async () => {
+            setBusy(true);
+            await includeTrack(uri).finally(() => setBusy(false));
+          }}
+        >
+          <RotateCcw size={14} /> Ripristina il brano
+        </Button>
+      </Empty>
+    );
   if (info.data && !t) return <Empty title="Brano non trovato" />;
   const mood = t ? getMood(t.valence, t.energy) : 'sconosciuto';
 
@@ -133,6 +154,22 @@ export default function TrackPage({ uri }: { uri: string }) {
                   <ExternalLink size={14} /> Apri in Spotify
                 </Button>
               </a>
+            </div>
+          )}
+          {t && (
+            <div className="mt-2">
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={busy}
+                title="Toglie il brano da tutte le statistiche, i grafici, il racconto e il PDF. Si ripristina da qui o da Impostazioni."
+                onClick={async () => {
+                  setBusy(true);
+                  await excludeTrack({ uri, track: t.track, artist: t.artist }).finally(() => setBusy(false));
+                }}
+              >
+                <EyeOff size={14} /> Escludi da tutto
+              </Button>
             </div>
           )}
         </div>
