@@ -14,7 +14,10 @@ import {
   Search,
   ShieldCheck,
   FileDown,
+  FolderOpen,
 } from 'lucide-react';
+import { leaveAnalysis } from '../lib/analyses';
+import { stopAll } from '../enrichment/jobs';
 import { useRoute, routes } from '../lib/router';
 import { useApp } from '../lib/store';
 import { cx, Kbd } from './ui';
@@ -40,6 +43,11 @@ export function Shell({ children }: { children: ReactNode }) {
   const jobs = useApp((s) => s.jobs);
   const set = useApp((s) => s.set);
   const profileName = useApp((s) => s.profile?.displayName ?? s.profile?.username ?? null);
+  const analysisName = useApp((s) => s.analysis?.name ?? null);
+  const switchAnalysis = () => {
+    stopAll();
+    leaveAnalysis();
+  };
   const running = Object.values(jobs).filter((j) => j.status === 'running');
   const isStory = current === 'story';
 
@@ -67,6 +75,20 @@ export function Shell({ children }: { children: ReactNode }) {
           <img src="/favicon.svg" alt="" width={28} height={28} className="rounded-lg" />
           <span className="display text-2xl">Ascolti</span>
         </a>
+        {analysisName && (
+          <button
+            onClick={switchAnalysis}
+            title="Torna all’elenco delle analisi salvate o creane una nuova"
+            className="mb-3 flex items-center gap-2 rounded-2xl border border-border bg-surface-1 px-3 py-2 text-left hover:bg-surface-2"
+          >
+            <FolderOpen size={15} className="shrink-0 text-[var(--accent)]" />
+            <span className="min-w-0 flex-1">
+              <span className="block text-[10px] uppercase tracking-wider text-text-faint">Analisi</span>
+              <span className="block truncate text-sm text-text">{analysisName}</span>
+            </span>
+            <span className="text-[11px] text-text-faint">cambia</span>
+          </button>
+        )}
         <button
           onClick={() => set({ paletteOpen: true })}
           className="mb-4 flex h-9 items-center gap-2 rounded-full border border-border bg-surface-1 px-3 text-sm text-text-faint hover:text-text"
@@ -118,7 +140,7 @@ export function Shell({ children }: { children: ReactNode }) {
             </a>
           )}
           <div className="mt-3 flex items-center gap-2 px-3 text-[11px] text-text-faint">
-            <ShieldCheck size={13} className="text-good" /> Dati solo sul tuo dispositivo
+            <ShieldCheck size={13} className="text-good" /> Dati nel database locale
           </div>
         </div>
       </aside>
@@ -130,6 +152,11 @@ export function Shell({ children }: { children: ReactNode }) {
             <a href={routes.overview()} className="display text-xl lg:hidden">
               Ascolti
             </a>
+            {analysisName && (
+              <button onClick={switchAnalysis} className="flex max-w-[30vw] items-center gap-1 truncate rounded-full px-2 py-1 text-xs text-text-muted hover:bg-surface-2 lg:hidden" aria-label={`Analisi ${analysisName}: cambia`}>
+                <FolderOpen size={13} /> <span className="truncate">{analysisName}</span>
+              </button>
+            )}
             <div className="min-w-0 flex-1">
               <TimeFilter />
             </div>

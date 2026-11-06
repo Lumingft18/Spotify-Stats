@@ -9,7 +9,7 @@
 //    and skill = 1 − MAE/MAE_baseline.
 //  - Verdict "useful" for a dimension only if the MAE CI is entirely below the baseline MAE AND the
 //    r CI is entirely above 0. Otherwise estimates for that dimension are not written.
-import { idb } from '../lib/idb';
+import { kv } from '../lib/kv';
 import { getApp } from '../lib/store';
 import { bootstrapCI, mae, mean, pearson, rng, shuffleInPlace } from '../ml/stats';
 import { estimateMood, measuredTracks, pickAnchors, type Item } from './mood';
@@ -46,7 +46,7 @@ export interface MoodBench {
 
 const BENCH_KEY = 'mood_bench';
 
-export const loadMoodBench = () => idb.get<MoodBench>(BENCH_KEY);
+export const loadMoodBench = () => kv.get<MoodBench>(BENCH_KEY);
 
 
 /** The stored result for the configured model, if any. */
@@ -105,7 +105,14 @@ export async function runMoodBench(opts: {
 
   const providers: ProviderBench[] = [];
   const model = getApp().settings.llmModelBulk;
-  const est = await estimateMood(sample as Item[], anchors, { samples: 1, signal: opts.signal, onProgress: (d, t) => opts.onProgress?.(model, d, t) });
+  // Cached only under 'mood_bench': the split is a fixed hash of the artist name, so a cached benchmark estimate
+  // was always made without anchors by the same artist — reusing it keeps the verdict honest and costs nothing.
+  const est = await estimateMood(sample as Item[], anchors, {
+    samples: 1,
+    signal: opts.signal,
+    onProgress: (d, t) => opts.onProgress?.(model, d, t),
+    cacheKind: 'mood_bench',
+  });
   const got = sample.filter((t) => {
     const e = est.get(t.uri);
     return e && e.valence != null && e.energy != null;
@@ -139,6 +146,6 @@ export async function runMoodBench(opts: {
     baseline,
     providers: [...providers, ...kept],
   };
-  if (!opts.signal?.aborted) await idb.set(BENCH_KEY, bench);
+  if (!opts.signal?.aborted) await kv.set(BENCH_KEY, bench);
   return bench;
 }

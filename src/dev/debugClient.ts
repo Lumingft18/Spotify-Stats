@@ -1,6 +1,6 @@
 // Browser half of the dev-only debug bridge (see debugBridge.ts). Loaded only by the Vite dev server.
 import { query } from '../data/db';
-import { idb, type StoreName } from '../lib/idb';
+import { kv, type StoreName } from '../lib/kv';
 import { useApp } from '../lib/store';
 
 const SECRET = /key|token|secret|password/i;
@@ -44,8 +44,8 @@ async function handle(op: string, payload: Record<string, unknown> | null): Prom
     case 'idb': {
       const store = (payload?.store as StoreName) ?? 'kv';
       const key = payload?.key as string | null;
-      if (!key) return (await idb.getAll<unknown>(store)).map(([k, v]) => ({ key: k, type: Array.isArray(v) ? `array(${v.length})` : typeof v }));
-      return truncate(redact(await idb.get(key, store)));
+      if (!key) return { analysis: useApp.getState().analysis?.name ?? null, keys: await kv.list(store) };
+      return truncate(redact(await kv.get(key, store)));
     }
     case 'navigate': {
       const hash = String(payload?.hash ?? '');

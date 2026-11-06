@@ -1,9 +1,9 @@
 import { persistMeta, query, upsertMeta } from '../data/db';
 import type { MetaRow } from '../data/schema';
-import { idb } from '../lib/idb';
+import { kv } from '../lib/kv';
 import { getApp, type ConnectionId } from '../lib/store';
 import { sleep } from './net';
-import { cacheCatalog } from '../lib/catalogCache';
+import { cacheCatalog, clearTriedShared, readTried, writeTried } from '../lib/catalogCache';
 import { autoMoodAi, stopMoodAi } from './moodAi';
 import { autoEmbeddings, stopEmbeddings } from './embedAi';
 import { isEnrichmentHeld } from './pause';
@@ -11,6 +11,23 @@ import { applyMoodAdjustments } from '../data/moodAdjust';
 import { fetchArtistTagsMB, fetchAudioFeatures, fetchCover, fetchLyrics, fetchTags, type TrackRef } from './providers';
 
 export type StepId = 'covers' | 'audiofeatures' | 'lyrics' | 'tags';
+
+/** Results of these steps go to the shared catalog, so "already looked up" can be shared too.
+ *  Last.fm per-track tags stay private to the analysis (not cached), so their lookups are not shared. */
+function sharedTriedKey(step: StepId): string | null {
+  if (step === 'tags') return getApp().settings.lastfmKey ? null : 'tags:mb';
+  return step;
+}
+
+async function loadTried(step: StepId, uris: string[]): Promise<Set<string>> {
+  const tried = new Set((await kv.get<string[]>(`tried:${step}`)) ?? []);
+  const shared = sharedTriedKey(step);
+  if (shared) {
+    const rest = uris.filter((u) => !tried.has(u));
+    for (const u of await readTried(shared, rest).catch(() => [] as string[])) tried.add(u);
+  }
+  return tried;
+}
 
 interface StepDef {
   label: string;
@@ -143,11 +160,11 @@ export function stopAll() {
 
 export async function pendingCount(step: StepId): Promise<number> {
   const d = STEPS[step];
-  const tried = new Set((await idb.get<string[]>(`tried:${step}`)) ?? []);
   const rows = await query<{ uri: string }>(
     (typeof d.itemsSql === 'function' ? d.itemsSql() : d.itemsSql) ??
       `SELECT t.uri FROM tracks t LEFT JOIN meta m USING (uri) WHERE m.${d.column} IS NULL AND t.plays > 0 ${d.filter ? 'AND ' + d.filter : ''}`,
   );
+  const tried = await loadTried(step, rows.map((r) => r.uri));
   return rows.filter((r) => !tried.has(r.uri)).length;
 }
 
@@ -171,8 +188,7 @@ async function runStepNow(step: StepId, limit: number): Promise<void> {
 
   const ctrl = new AbortController();
   controllers.set(step, ctrl);
-  const triedArr = (await idb.get<string[]>(`tried:${step}`)) ?? [];
-  const tried = new Set(triedArr);
+  const sharedKey = sharedTriedKey(step);
   try {
     const rows = await query<TrackRef>(
       (typeof d.itemsSql === 'function' ? d.itemsSql() : d.itemsSql) ??
@@ -180,18 +196,20 @@ async function runStepNow(step: StepId, limit: number): Promise<void> {
        WHERE m.${d.column} IS NULL AND t.plays > 0 ${d.filter ? 'AND ' + d.filter : ''}
        ORDER BY t.minutes DESC`,
     );
+    const tried = await loadTried(step, rows.map((r) => r.uri));
+    let triedNew: string[] = [];
     const pendingAll = rows.filter((r) => !tried.has(r.uri));
     const items = pendingAll.slice(0, limit);
     // Cumulative progress across reloads: a refresh resumes the count instead of restarting from 0.
     const progressKey = `progress:${step}`;
-    const base = pendingAll.length ? ((await idb.get<number>(progressKey)) ?? 0) : 0;
+    const base = pendingAll.length ? ((await kv.get<number>(progressKey)) ?? 0) : 0;
     const total = base + pendingAll.length;
     let done = base;
     const job = (status: 'running' | 'done' | 'paused' | 'error', detail?: string) =>
       app.setJob({ id: step, label: d.label, done, total, status, detail });
     job('running');
     if (!items.length) {
-      await idb.del(progressKey);
+      await kv.del(progressKey);
       job('done');
       return;
     }
@@ -221,10 +239,15 @@ async function runStepNow(step: StepId, limit: number): Promise<void> {
         if (unsaved) await persistMeta();
         unsaved = false;
         lastSave = Date.now();
-        await idb.setMany([
+        await kv.setMany([
           [`tried:${step}`, Array.from(tried)],
           [progressKey, done],
         ]);
+        if (sharedKey && triedNew.length) {
+          const batch = triedNew;
+          triedNew = [];
+          await writeTried(sharedKey, batch).catch(() => undefined);
+        }
       }
     };
 
@@ -252,7 +275,11 @@ async function runStepNow(step: StepId, limit: number): Promise<void> {
           }
         }
         // Only successful lookups are remembered; failed ones (rate limits, network) are retried next run.
-        if (ok) for (const t of b) tried.add(t.uri);
+        if (ok)
+          for (const t of b) {
+            tried.add(t.uri);
+            triedNew.push(t.uri);
+          }
         done += b.length;
         job('running');
         if (pending.length >= 50 || Date.now() - lastFlush > 3000) await flush();
@@ -261,7 +288,7 @@ async function runStepNow(step: StepId, limit: number): Promise<void> {
 
     await Promise.all(Array.from({ length: d.concurrency }, worker));
     await flush(true);
-    if (!ctrl.signal.aborted && items.length === pendingAll.length) await idb.del(progressKey);
+    if (!ctrl.signal.aborted && items.length === pendingAll.length) await kv.del(progressKey);
     if (step === 'audiofeatures') await applyMoodAdjustments();
     job(ctrl.signal.aborted ? 'paused' : 'done');
   } catch (e) {
@@ -274,9 +301,9 @@ async function runStepNow(step: StepId, limit: number): Promise<void> {
 
 /** Earlier versions marked rate-limited lookups as "tried": forget those once so they are fetched again. */
 async function migrateTried() {
-  if ((await idb.get<number>('tried_version')) === 2) return;
-  await Promise.all(['tried:lyrics', 'tried:tags', 'tried:covers'].map((k) => idb.del(k)));
-  await idb.set('tried_version', 2);
+  if ((await kv.get<number>('tried_version')) === 2) return;
+  await kv.delMany(['tried:lyrics', 'tried:tags', 'tried:covers']);
+  await kv.set('tried_version', 2);
 }
 
 /** Starts every enabled step in parallel (different hosts → no shared rate limit). */
@@ -303,5 +330,6 @@ function runAllEnabledNow() {
 }
 
 export async function resetTried() {
-  await Promise.all((Object.keys(STEPS) as StepId[]).flatMap((s) => [idb.del(`tried:${s}`), idb.del(`progress:${s}`)]));
+  await kv.delMany((Object.keys(STEPS) as StepId[]).flatMap((s) => [`tried:${s}`, `progress:${s}`]));
+  await clearTriedShared();
 }

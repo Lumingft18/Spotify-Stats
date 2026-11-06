@@ -1,4 +1,5 @@
 import { useEffect } from 'react';
+import { coverSrc } from './api';
 
 const cache = new Map<string, string>();
 
@@ -64,7 +65,7 @@ export function extractAccent(src: string): Promise<string | null> {
       }
     };
     img.onerror = () => resolve(null);
-    img.src = src;
+    img.src = coverSrc(src) ?? src;
   });
 }
 

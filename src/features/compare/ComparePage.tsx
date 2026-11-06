@@ -3,7 +3,7 @@ import { Upload, Trash2, Users, ShieldCheck } from 'lucide-react';
 import { exec, loadScratchPlays, query } from '../../data/db';
 import { parseExport } from '../../data/import';
 import { useAsync } from '../../data/useSql';
-import { idb } from '../../lib/idb';
+import { kv } from '../../lib/kv';
 import { useApp } from '../../lib/store';
 import { fmtHours, fmtInt, fmtPct } from '../../lib/format';
 import { routes } from '../../lib/router';
@@ -213,7 +213,7 @@ function FriendCard({ f, onRemove }: { f: Friend; onRemove: () => void }) {
 
 export default function ComparePage() {
   const [v, setV] = useState(0);
-  const friends = useAsync(async () => (await idb.get<Friend[]>('friends')) ?? [], [v]);
+  const friends = useAsync(async () => (await kv.get<Friend[]>('friends')) ?? [], [v]);
   const [name, setName] = useState('');
   const [step, setStep] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -224,7 +224,7 @@ export default function ComparePage() {
     setErr(null);
     try {
       const f = await summarizeFriend(name.trim() || 'Amico', Array.from(files), setStep);
-      await idb.set('friends', [...(friends.value ?? []), f]);
+      await kv.set('friends', [...(friends.value ?? []), f]);
       setName('');
       setV((x) => x + 1);
     } catch (e) {
@@ -261,7 +261,7 @@ export default function ComparePage() {
               key={f.id}
               f={f}
               onRemove={async () => {
-                await idb.set('friends', (friends.value ?? []).filter((x) => x.id !== f.id));
+                await kv.set('friends', (friends.value ?? []).filter((x) => x.id !== f.id));
                 setV((x) => x + 1);
               }}
             />

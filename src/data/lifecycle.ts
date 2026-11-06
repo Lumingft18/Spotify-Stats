@@ -1,11 +1,12 @@
 import { exec, getExcluded, loadPlays, query, setExcluded, setFilter, upsertMeta, type ExcludedTrack } from './db';
 import { clearIndexCache } from '../ml/embeddings';
-import { parseExport } from './import';
+import { parseExport, type ParseResult } from './import';
 import { emptyProfile, type AccountProfile } from './account';
 import { getApp } from '../lib/store';
-import { idb } from '../lib/idb';
+import { kv } from '../lib/kv';
 import { readCatalog } from '../lib/catalogCache';
 import { runAllEnabled } from '../enrichment/jobs';
+import { analyses, currentAnalysisId, setCurrentAnalysis } from '../lib/analyses';
 import { applyMoodAdjustments } from './moodAdjust';
 
 /** Re-applies cached public metadata (covers, audio features) to the loaded tracks — no network needed. */
@@ -25,14 +26,34 @@ export async function afterDataLoaded() {
   );
   await setFilter(null, null);
   const [profile, dataset] = await Promise.all([
-    idb.get<AccountProfile>('profile'),
-    idb.get<{ historyKind: 'extended' | 'legacy'; rows: number }>('dataset'),
+    kv.get<AccountProfile>('profile'),
+    kv.get<{ historyKind: 'extended' | 'legacy'; rows: number }>('dataset'),
   ]);
   getApp().set({ bounds: b[0] ?? null, status: 'ready', range: { from: null, to: null }, profile: profile ?? null, dataset: dataset ?? null });
+  await syncAnalysisMeta(b[0] ?? null, profile ?? null, dataset ?? null).catch((e) => console.warn('analysis meta', e));
   await hydrateFromCatalog().catch((e) => console.warn('catalog cache', e));
   await applyMoodAdjustments().catch((e) => console.warn('mood adjust', e));
   getApp().bump();
   setTimeout(runAllEnabled, 800);
+}
+
+/** Keeps the history list informative (period, size, person) and marks the analysis as just opened. */
+async function syncAnalysisMeta(
+  bounds: { min: string; max: string } | null,
+  profile: AccountProfile | null,
+  dataset: { historyKind: 'extended' | 'legacy'; rows: number } | null,
+) {
+  const id = currentAnalysisId();
+  if (!id) return;
+  const a = await analyses.update(id, {
+    opened: true,
+    first_day: bounds?.min ?? null,
+    last_day: bounds?.max ?? null,
+    history_kind: dataset?.historyKind ?? null,
+    rows: dataset?.rows ?? null,
+    display_name: profile?.displayName ?? profile?.username ?? null,
+  });
+  getApp().set({ analysis: a });
 }
 
 export async function applyRange(from: string | null, to: string | null) {
@@ -58,40 +79,62 @@ export interface ImportOutcome {
 export async function importFiles(
   files: File[],
   onStep: (s: string) => void,
-  opts: { mode?: 'replace' | 'merge'; name?: string } = {},
+  opts: { mode?: 'replace' | 'merge'; name?: string; newAnalysis?: boolean } = {},
 ): Promise<ImportOutcome> {
   const mode = opts.mode ?? 'replace';
   const tz = getApp().settings.timeZone;
   const t0 = performance.now();
   const res = await parseExport(files, tz, onStep);
-  const prevDataset = await idb.get<{ historyKind: 'extended' | 'legacy'; rows: number }>('dataset');
-  const prevProfile = mode === 'merge' ? await idb.get<AccountProfile>('profile') : undefined;
+  if (!opts.newAnalysis) return importInto(res, t0, mode, onStep, opts.name);
+
+  // New saved analysis: the typed name wins, otherwise the name in the "account data" package.
+  const title = opts.name?.trim() || res.profile?.displayName?.trim() || res.profile?.username?.trim() || '';
+  if (!title) throw new Error('Dai un nome a questa analisi (oppure carica anche lo ZIP “Dati dell’account”: il nome lo prendo da lì).');
+  onStep('Creo l’analisi nel database…');
+  const created = await analyses.create(title);
+  setCurrentAnalysis(created.id);
+  try {
+    return await importInto(res, t0, mode, onStep);
+  } catch (e) {
+    await analyses.remove(created.id).catch(() => undefined);
+    setCurrentAnalysis(null);
+    throw e;
+  }
+}
+
+async function importInto(
+  res: ParseResult,
+  t0: number,
+  mode: 'replace' | 'merge',
+  onStep: (s: string) => void,
+  personName?: string,
+): Promise<ImportOutcome> {
+  const prevDataset = await kv.get<{ historyKind: 'extended' | 'legacy'; rows: number }>('dataset');
+  const prevProfile = mode === 'merge' ? await kv.get<AccountProfile>('profile') : undefined;
 
   // Profile: merge account package fields, then manual name as fallback.
   let profile: AccountProfile | null = res.profile ?? prevProfile ?? null;
   if (res.profile && prevProfile) profile = { ...prevProfile, ...res.profile, displayName: res.profile.displayName ?? prevProfile.displayName };
-  if (opts.name?.trim()) {
+  if (personName?.trim()) {
     profile = profile ?? emptyProfile();
-    if (!profile.displayName) profile.displayName = opts.name.trim();
+    if (!profile.displayName) profile.displayName = personName.trim();
   }
-  if (profile) await idb.set('profile', profile);
-  else await idb.del('profile');
+  if (profile) await kv.set('profile', profile);
+  else await kv.del('profile');
 
   let keptExisting = false;
   const hasHistory = res.stats.rows > 0 && res.historyKind !== 'none';
   const downgrade = mode === 'merge' && res.historyKind === 'legacy' && prevDataset?.historyKind === 'extended';
   if (hasHistory && !downgrade && mode === 'replace') {
     // New person / fresh start: drop personal derived data (catalog cache is kept and re-applied).
-    await Promise.all(
-      ['emb_index', 'clusters', 'bandit_arms', 'bandit_feedback', 'mood_report', 'ask_history', 'era_names', 'meta_rows'].map((k) => idb.del(k)),
-    );
+    await kv.delMany(['emb_index', 'clusters', 'bandit_arms', 'bandit_feedback', 'mood_report', 'ask_history', 'era_names', 'meta_rows']);
     await exec('DELETE FROM meta; DELETE FROM clusters;').catch(() => undefined);
     clearIndexCache();
   }
   if (hasHistory && !downgrade) {
     onStep(`Indicizzo ${res.stats.rows.toLocaleString('it-IT')} ascolti…`);
     await loadPlays(res.cols);
-    await idb.set('dataset', { historyKind: res.historyKind, rows: res.stats.rows });
+    await kv.set('dataset', { historyKind: res.historyKind, rows: res.stats.rows });
   } else {
     keptExisting = downgrade;
     if (!prevDataset && !hasHistory) throw new Error('Questo pacchetto non contiene cronologia di ascolto: carica anche la "Cronologia di streaming estesa".');
@@ -101,9 +144,9 @@ export async function importFiles(
 }
 
 export async function setProfileName(name: string) {
-  const p = (await idb.get<AccountProfile>('profile')) ?? emptyProfile();
+  const p = (await kv.get<AccountProfile>('profile')) ?? emptyProfile();
   p.displayName = name.trim() || null;
-  await idb.set('profile', p);
+  await kv.set('profile', p);
   getApp().set({ profile: p });
 }
 

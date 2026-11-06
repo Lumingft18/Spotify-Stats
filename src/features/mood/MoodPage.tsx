@@ -5,7 +5,7 @@ import { getApp, useApp } from '../../lib/store';
 import { fmtHours, fmtInt, fmtPct, fmtMonth } from '../../lib/format';
 import { getMood, MOODS, MOOD_CENTER, MOOD_HEX, MOOD_SQL, moodLabel } from '../../lib/mood';
 import { navigate, routes } from '../../lib/router';
-import { idb } from '../../lib/idb';
+import { kv } from '../../lib/kv';
 import { computeLayout, DEFAULT_EMBED_MODEL, EMBED_MODELS, loadIndex, semanticSearch } from '../../ml/embeddings';
 import { EMBED_JOB, startEmbeddings, stopEmbeddings } from '../../enrichment/embedAi';
 import { runStep } from '../../enrichment/jobs';
@@ -134,7 +134,7 @@ function MoodStatus() {
            count(DISTINCT p.uri) FILTER (WHERE m.mood_adj LIKE 'live:studio%') AS live,
            count(DISTINCT p.uri) FILTER (WHERE m.valence_lyrics IS NOT NULL) AS lyrics
     FROM p LEFT JOIN meta m USING (uri)`);
-  const report = useAsync(() => idb.get<MoodRunReport>('mood_report'));
+  const report = useAsync(() => kv.get<MoodRunReport>('mood_report'));
   const job = useApp((s) => s.jobs.audiofeatures);
   const aiJob = useApp((s) => s.jobs[MOOD_AI_JOB]);
   const autoMood = useApp((s) => s.settings.autoMoodAi);

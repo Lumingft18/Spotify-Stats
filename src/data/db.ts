@@ -1,11 +1,11 @@
-// DuckDB-WASM engine (runs in its own Web Worker) + persistence in IndexedDB as Arrow IPC.
+// DuckDB-WASM engine (runs in its own Web Worker) + persistence of the open analysis in the local database (Arrow IPC).
 import * as duckdb from '@duckdb/duckdb-wasm';
 import mvpWasm from '@duckdb/duckdb-wasm/dist/duckdb-mvp.wasm?url';
 import mvpWorker from '@duckdb/duckdb-wasm/dist/duckdb-browser-mvp.worker.js?url';
 import ehWasm from '@duckdb/duckdb-wasm/dist/duckdb-eh.wasm?url';
 import ehWorker from '@duckdb/duckdb-wasm/dist/duckdb-browser-eh.worker.js?url';
 import { tableFromArrays, tableToIPC, tableFromIPC, Table, Utf8, Float64, Int32, Bool, vectorFromArray, makeTable } from 'apache-arrow';
-import { idb } from '../lib/idb';
+import { kv } from '../lib/kv';
 import { PLAY_COLUMNS, type PlayColumns } from './normalize';
 import { BUILD_SQL, META_SQL, META_COLUMNS, filterViewSql, type MetaRow } from './schema';
 
@@ -116,7 +116,7 @@ export interface ExcludedTrack {
 const EXCLUDED_KEY = 'excluded';
 
 export async function getExcluded(): Promise<ExcludedTrack[]> {
-  return (await idb.get<ExcludedTrack[]>(EXCLUDED_KEY)) ?? [];
+  return (await kv.get<ExcludedTrack[]>(EXCLUDED_KEY)) ?? [];
 }
 
 async function writeExcludedTable(list: ExcludedTrack[]) {
@@ -126,7 +126,7 @@ async function writeExcludedTable(list: ExcludedTrack[]) {
 
 /** Saves the exclusion list and rebuilds every derived table without those tracks (filter view is reset by the caller). */
 export async function setExcluded(list: ExcludedTrack[]): Promise<void> {
-  await idb.set(EXCLUDED_KEY, list);
+  await kv.set(EXCLUDED_KEY, list);
   await writeExcludedTable(list);
   await exec(BUILD_SQL);
 }
@@ -147,20 +147,20 @@ export async function loadPlays(cols: PlayColumns): Promise<void> {
   const t = playsTable(cols);
   await insertArrow(t, 'plays_raw');
   await buildDerived();
-  await idb.set(IPC_KEY, tableToIPC(t, 'stream'));
+  await kv.set(IPC_KEY, tableToIPC(t, 'stream'));
 }
 
 /** Restores the previous session. Returns false when nothing is stored. */
 export async function restore(): Promise<boolean> {
-  const ipc = await idb.get<Uint8Array>(IPC_KEY);
+  const ipc = await kv.get<Uint8Array>(IPC_KEY);
   if (!ipc) return false;
   await insertArrow(tableFromIPC(ipc), 'plays_raw');
   await buildDerived();
-  const metaRows = await idb.get<MetaRow[]>('meta_rows');
+  const metaRows = await kv.get<MetaRow[]>('meta_rows');
   if (metaRows?.length) {
     for (let i = 0; i < metaRows.length; i += 3000) await upsertMeta(metaRows.slice(i, i + 3000), false);
   }
-  const clusters = await idb.get<Array<{ id: number; label: string }>>('clusters');
+  const clusters = await kv.get<Array<{ id: number; label: string }>>('clusters');
   if (clusters?.length) await setClusters(clusters, false);
   return true;
 }
@@ -210,7 +210,7 @@ export async function persistMeta() {
   // Stored as plain rows (structured clone) — robust across engine versions.
   const rows = await query<MetaRow>(`SELECT * FROM meta`);
   const clean = rows.map((r) => Object.fromEntries(Object.entries(r).filter(([, v]) => v != null)) as MetaRow);
-  await idb.set('meta_rows', clean);
+  await kv.set('meta_rows', clean);
 }
 
 export async function setClusters(list: Array<{ id: number; label: string }>, persist = true) {
@@ -222,11 +222,11 @@ export async function setClusters(list: Array<{ id: number; label: string }>, pe
     label: vectorFromArray(list.map((c) => c.label), new Utf8()),
   } as never) as unknown as Table;
   await insertArrow(withLabels, 'clusters');
-  if (persist) await idb.set('clusters', list);
+  if (persist) await kv.set('clusters', list);
 }
 
-export async function wipeAll() {
-  await idb.wipe();
+/** Drops every in-memory table (the saved analysis itself is deleted by the caller). */
+export async function dropAll() {
   try {
     await exec(`DROP VIEW IF EXISTS p; DROP TABLE IF EXISTS plays; DROP TABLE IF EXISTS plays_raw; DROP TABLE IF EXISTS tracks;
       DROP TABLE IF EXISTS plays_seq; DROP TABLE IF EXISTS meta; DROP TABLE IF EXISTS clusters;`);

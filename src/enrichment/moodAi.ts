@@ -6,7 +6,7 @@ import { lyricsValenceCandidates, moodCandidates, rejectAiEstimates, runLyricsVa
 import { currentBench, runMoodBench } from '../llm/moodBench';
 import { applyMoodAdjustments } from '../data/moodAdjust';
 import { exec, persistMeta } from '../data/db';
-import { idb } from '../lib/idb';
+import { kv } from '../lib/kv';
 import { getApp } from '../lib/store';
 import { isEnrichmentHeld } from './pause';
 
@@ -88,10 +88,10 @@ export async function startMoodAi(opts: { limit: number; samples?: 1 | 2 | 3 }):
  *  v2: the old prompt told the model to stay near the average, which flattened estimates (r ≈ 0.2 vs 0.5 now). */
 const PROMPT_VERSION = 2;
 async function requeueOldEstimates() {
-  if ((await idb.get<number>('mood_prompt_version')) === PROMPT_VERSION) return;
+  if ((await kv.get<number>('mood_prompt_version')) === PROMPT_VERSION) return;
   await exec(`UPDATE meta SET mood_source = 'llm_pending' WHERE mood_source = 'llm'`);
   await persistMeta();
-  await idb.set('mood_prompt_version', PROMPT_VERSION);
+  await kv.set('mood_prompt_version', PROMPT_VERSION);
 }
 
 /** Runs only when enabled in Impostazioni, a key is set and some tracks still lack a mood. */

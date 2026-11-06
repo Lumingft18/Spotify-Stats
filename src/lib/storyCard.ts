@@ -1,3 +1,4 @@
+import { coverSrc } from './api';
 import { extractAccent } from './color';
 
 /**
@@ -57,7 +58,7 @@ function loadImg(src: string): Promise<HTMLImageElement | null> {
     i.crossOrigin = 'anonymous';
     i.onload = () => res(i);
     i.onerror = () => res(null);
-    i.src = src;
+    i.src = coverSrc(src) ?? src;
   });
 }
 

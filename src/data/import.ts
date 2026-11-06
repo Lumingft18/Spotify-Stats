@@ -10,6 +10,31 @@ function unzipAsync(buf: Uint8Array): Promise<Record<string, Uint8Array>> {
   );
 }
 
+/** True when the files include the "account data" package (where the person's name is). Lists ZIP entries only — no decompression. */
+export async function hasAccountData(files: File[]): Promise<boolean> {
+  for (const f of files) {
+    const n = f.name.toLowerCase();
+    if (n.endsWith('.json') && isAccountFile(f.name)) return true;
+    if (!n.endsWith('.zip')) continue;
+    const buf = new Uint8Array(await f.arrayBuffer());
+    let found = false;
+    await new Promise<void>((resolve) =>
+      unzip(
+        buf,
+        {
+          filter: (e) => {
+            if (isAccountFile(e.name)) found = true;
+            return false;
+          },
+        },
+        () => resolve(),
+      ),
+    );
+    if (found) return true;
+  }
+  return false;
+}
+
 export interface ParseResult {
   cols: PlayColumns;
   stats: NormalizeStats;

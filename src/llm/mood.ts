@@ -4,11 +4,12 @@
 // (Levanto Sage was benchmarked on the same tracks in Nov 2026 and did not beat the LLM: removed.)
 import { query, upsertMeta } from '../data/db';
 import type { MetaRow } from '../data/schema';
-import { idb } from '../lib/idb';
+import { kv } from '../lib/kv';
 import { getApp } from '../lib/store';
 import { structured } from './client';
 import { MOOD_CENTER } from '../lib/mood';
 import type { MoodBench } from './moodBench';
+import { aiCacheGet, aiCachePut, promptVersion } from '../lib/aiCache';
 
 export interface Item {
   uri: string;
@@ -101,22 +102,46 @@ export async function measuredTracks(limit = 5000): Promise<Item[]> {
   );
 }
 
-/** Runs one estimator over `items` in batches. Returns uri → estimate. */
+// Cache keys: a change to the prompt, the schema or the text format gives a new version → fresh estimates.
+const MOOD_VERSION = promptVersion(SYSTEM, SCHEMA, 'describe:380|anchors:160|B:12');
+const LYRICS_VERSION = () => promptVersion(LYRICS_SYSTEM, LYRICS_SCHEMA, 'clip:700|B:15');
+
+/** Runs one estimator over `items` in batches. Returns uri → estimate.
+ *  Songs already estimated by the same model and prompt (any analysis, any person) come from the shared cache: no new call. */
 export async function estimateMood(
-  items: Item[],
+  allItems: Item[],
   anchors: Item[],
-  opts: { samples?: number; signal?: AbortSignal; onProgress?: (done: number, total: number) => void; onBatch?: (b: Map<string, Estimate>) => Promise<void> },
+  opts: {
+    samples?: number;
+    signal?: AbortSignal;
+    onProgress?: (done: number, total: number) => void;
+    onBatch?: (b: Map<string, Estimate>) => Promise<void>;
+    /** 'mood_bench' keeps benchmark estimates (always made with artist-disjoint anchors) apart from regular ones. */
+    cacheKind?: 'mood' | 'mood_bench';
+  },
 ): Promise<Map<string, Estimate>> {
   const out = new Map<string, Estimate>();
+  const model = getApp().settings.llmModelBulk;
+  const cacheKey = { kind: opts.cacheKind ?? 'mood', model, version: MOOD_VERSION };
+  const cached = await aiCacheGet<Estimate>(cacheKey, allItems.map((i) => i.uri));
+  const hits = new Map<string, Estimate>();
+  for (const i of allItems) {
+    const c = cached.get(i.uri);
+    if (c && c.valence != null) hits.set(i.uri, c);
+  }
+  for (const [k, v] of hits) out.set(k, v);
+  if (hits.size) await opts.onBatch?.(hits);
+  const items = allItems.filter((i) => !hits.has(i.uri));
+  const total = allItems.length;
+
   const B = 12;
   const batches: Item[][] = [];
   for (let i = 0; i < items.length; i += B) batches.push(items.slice(i, i + B));
   const anchorText = anchors.length ? anchorLines(anchors) : '(nessun riferimento misurato disponibile)';
   const samples = Math.max(1, opts.samples ?? 1);
-  const model = getApp().settings.llmModelBulk;
   let cursor = 0;
-  let done = 0;
-  opts.onProgress?.(0, items.length);
+  let done = hits.size;
+  opts.onProgress?.(done, total);
 
   const runBatch = async (batch: Item[]): Promise<Map<string, Estimate>> => {
     const res = new Map<string, Estimate>();
@@ -165,10 +190,11 @@ export async function estimateMood(
       }
       if (res) {
         for (const [k, v] of res) out.set(k, v);
+        await aiCachePut(cacheKey, [...res].map(([uri, value]) => ({ uri, value })));
         await opts.onBatch?.(res);
       }
       done += batch.length;
-      opts.onProgress?.(done, items.length);
+      opts.onProgress?.(done, total);
     }
   };
   await Promise.all([worker(), worker(), worker()]);
@@ -223,7 +249,7 @@ export async function runMoodV2(opts: {
     },
   });
   const report: MoodRunReport = { analyzed, anchors: anchors.length, model, at: Date.now() };
-  await idb.set('mood_report', report);
+  await kv.set('mood_report', report);
   getApp().bump();
   return report;
 }
@@ -273,14 +299,19 @@ export async function lyricsValenceCandidates(limit: number) {
 /** Scores lyric valence for tracks that already have measured audio features. Returns how many were scored. */
 export async function runLyricsValence(opts: { limit: number; signal: AbortSignal; onProgress: (done: number, total: number) => void }): Promise<number> {
   const model = getApp().settings.llmModelBulk;
-  const targets = await lyricsValenceCandidates(opts.limit);
+  const all = await lyricsValenceCandidates(opts.limit);
+  const cacheKey = { kind: 'lyrics_valence', model, version: LYRICS_VERSION() };
+  const cached = await aiCacheGet<number>(cacheKey, all.map((t) => t.uri));
+  const fromCache: MetaRow[] = all.filter((t) => Number.isFinite(cached.get(t.uri))).map((t) => ({ uri: t.uri, valence_lyrics: cached.get(t.uri)! }));
+  if (fromCache.length) await upsertMeta(fromCache);
+  const targets = all.filter((t) => !Number.isFinite(cached.get(t.uri)));
   const B = 15;
   const batches: (typeof targets)[] = [];
   for (let i = 0; i < targets.length; i += B) batches.push(targets.slice(i, i + B));
-  let done = 0;
-  let scored = 0;
+  let done = fromCache.length;
+  let scored = fromCache.length;
   let cursor = 0;
-  opts.onProgress(0, targets.length);
+  opts.onProgress(done, all.length);
   const worker = async () => {
     while (cursor < batches.length && !opts.signal.aborted) {
       const batch = batches[cursor++];
@@ -301,14 +332,17 @@ export async function runLyricsValence(opts: { limit: number; signal: AbortSigna
           const t = ids.get(x.id);
           if (t && Number.isFinite(Number(x.valence))) rows.push({ uri: t.uri, valence_lyrics: Math.min(1, Math.max(0, Number(x.valence))) });
         }
-        if (rows.length) await upsertMeta(rows);
+        if (rows.length) {
+          await upsertMeta(rows);
+          await aiCachePut(cacheKey, rows.map((r) => ({ uri: r.uri, value: r.valence_lyrics as number })));
+        }
         scored += rows.length;
       } catch (e) {
         if (opts.signal.aborted) return;
         console.warn('lyrics valence batch failed', e);
       }
       done += batch.length;
-      opts.onProgress(done, targets.length);
+      opts.onProgress(done, all.length);
     }
   };
   await Promise.all([worker(), worker(), worker()]);

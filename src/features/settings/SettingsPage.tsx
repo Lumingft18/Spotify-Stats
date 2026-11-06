@@ -1,11 +1,12 @@
-import { useRef, useState } from 'react';
+import { useState } from 'react';
 import { EyeOff, RotateCcw, ShieldCheck, Trash2, Upload, Globe, KeyRound, Clock, Save, CheckCircle2 } from 'lucide-react';
 import { checkOpenRouterKey } from '../../llm/client';
-import { catalogSize, clearCatalog } from '../../lib/catalogCache';
+import { catalogStats, clearCatalog } from '../../lib/catalogCache';
+import { analyses, leaveAnalysis } from '../../lib/analyses';
 import { useAsync } from '../../data/useSql';
 import { ENV_KEYS, useApp, type ConnectionId } from '../../lib/store';
-import { getExcluded, query, loadPlays, wipeAll } from '../../data/db';
-import { afterDataLoaded, importFiles, includeAll, includeTrack } from '../../data/lifecycle';
+import { getExcluded, query, loadPlays, dropAll } from '../../data/db';
+import { afterDataLoaded, includeAll, includeTrack } from '../../data/lifecycle';
 import { emptyColumns, makeLocalizer, PLAY_COLUMNS, type PlayColumns } from '../../data/normalize';
 import { resetTried, runAllEnabled, stopAll } from '../../enrichment/jobs';
 import { autoMoodAi, MOOD_AI_JOB, stopMoodAi } from '../../enrichment/moodAi';
@@ -63,12 +64,16 @@ async function reapplyTimezone(tz: string) {
 
 function CatalogCard() {
   const [v, setV] = useState(0);
-  const n = useAsync(catalogSize, [v]);
+  const st = useAsync(catalogStats, [v]);
+  const n = (x: number | undefined) => (x ?? 0).toLocaleString('it-IT');
+  const c = st.value;
   return (
     <Card className="flex flex-wrap items-center justify-between gap-3">
       <div className="text-sm text-text-muted">
-        <span className="num text-text">{(n.value ?? 0).toLocaleString('it-IT')}</span> brani in cache. Sono dati pubblici del catalogo (URL copertina, valence, energia):
-        restano anche se carichi l’export di un’altra persona o cancelli i dati personali, così non vanno riscaricati.
+        <span className="num text-text">{n(c?.tracks)}</span> brani nel catalogo condiviso: <span className="num text-text">{n(c?.covers)}</span> copertine
+        {' '}(<span className="num text-text">{n(c?.images)}</span> immagini salvate, {((c?.imageBytes ?? 0) / 1e6).toFixed(1)} MB), <span className="num text-text">{n(c?.lyrics)}</span> testi,{' '}
+        <span className="num text-text">{n(c?.audio)}</span> audio features, <span className="num text-text">{n(c?.tags)}</span> tag, <span className="num text-text">{n(c?.embeddings)}</span>{' '}
+        embedding, <span className="num text-text">{n(c?.ai)}</span> stime AI per brano (restano etichettate come stime). Sono dati pubblici del catalogo, nel database locale: valgono per tutte le analisi e per chiunque usi questa app, così non vanno mai riscaricati.
       </div>
       <Button
         size="sm"
@@ -310,7 +315,7 @@ export default function SettingsPage() {
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [confirmWipe, setConfirmWipe] = useState(false);
-  const file = useRef<HTMLInputElement>(null);
+  const analysisName = useApp((s) => s.analysis?.name ?? 'questa analisi');
 
   const hosts = Array.from(
     net.reduce((m, e) => m.set(e.host, { ...e, n: (m.get(e.host)?.n ?? 0) + 1 }), new Map<string, { host: string; purpose: string; at: number; n: number }>()).values(),
@@ -318,7 +323,7 @@ export default function SettingsPage() {
 
   return (
     <div className="mx-auto flex max-w-5xl flex-col gap-12">
-      <PageHeader kicker="Impostazioni" title="Privacy e preferenze" sub="Tutto è calcolato sul tuo dispositivo. Qui decidi tu cosa può uscire, e verso chi." />
+      <PageHeader kicker="Impostazioni" title="Privacy e preferenze" sub="Tutto è calcolato e salvato sul tuo computer (database locale). Qui decidi tu cosa può uscire, e verso chi." />
 
       <Section kicker="Connessioni" title="Servizi esterni (tutti facoltativi)">
         <Card className="flex flex-col divide-y divide-border p-0">
@@ -385,11 +390,17 @@ export default function SettingsPage() {
         </Card>
       </Section>
 
-      <Section kicker="Dati" title="I tuoi dati">
+      <Section kicker="Dati" title={`Analisi “${analysisName}”`}>
         <Card className="flex flex-col gap-4">
           <div className="flex flex-wrap gap-2">
-            <Button onClick={() => file.current?.click()} disabled={!!busy}>
-              {busy === 'import' ? <Spinner size={14} /> : <Upload size={14} />} Sostituisci con un nuovo export
+            <Button
+              onClick={() => {
+                stopAll();
+                leaveAnalysis();
+              }}
+              disabled={!!busy}
+            >
+              <Upload size={14} /> Nuova analisi / apri un’altra
             </Button>
             <Button
               variant="ghost"
@@ -406,26 +417,6 @@ export default function SettingsPage() {
             >
               <Save size={14} /> Esporta arricchimento per l’analisi
             </Button>
-            <input
-              ref={file}
-              type="file"
-              accept=".zip,.json"
-              multiple
-              hidden
-              onChange={async (e) => {
-                if (!e.target.files?.length) return;
-                setBusy('import');
-                setErr(null);
-                try {
-                  stopAll();
-                  await importFiles(Array.from(e.target.files), () => undefined, { mode: 'replace' });
-                } catch (x) {
-                  setErr(x instanceof Error ? x.message : String(x));
-                } finally {
-                  setBusy(null);
-                }
-              }}
-            />
             <Button
               variant="ghost"
               onClick={async () => {
@@ -438,23 +429,25 @@ export default function SettingsPage() {
           </div>
           {!confirmWipe ? (
             <Button variant="danger" className="self-start" onClick={() => setConfirmWipe(true)}>
-              <Trash2 size={14} /> Cancella tutti i dati locali
+              <Trash2 size={14} /> Elimina questa analisi
             </Button>
           ) : (
             <div className="rounded-xl border border-bad/40 bg-bad/10 p-4 text-sm">
-              <div className="font-medium text-bad">Cancellare tutto?</div>
+              <div className="font-medium text-bad">Eliminare “{analysisName}”?</div>
               <p className="mt-1 text-text-muted">
-                Storico, copertine, mood, mappa, conversazioni e confronti verranno eliminati da questo browser. Non si può annullare. Le impostazioni e le chiavi restano.
+                Storico, mood, mappa, conversazioni e confronti di questa analisi verranno eliminati dal database. Non si può annullare. Le altre analisi, la cache condivisa
+                (copertine, testi…), le impostazioni e le chiavi restano.
               </p>
               <div className="mt-3 flex gap-2">
                 <Button
                   variant="danger"
                   onClick={async () => {
                     stopAll();
-                    await wipeAll();
+                    const id = useApp.getState().analysis?.id;
+                    if (id) await analyses.remove(id);
+                    await dropAll();
                     clearIndexCache();
-                    location.hash = '#/';
-                    location.reload();
+                    leaveAnalysis();
                   }}
                 >
                   Sì, cancella
@@ -473,7 +466,7 @@ export default function SettingsPage() {
         <ExcludedList />
       </Section>
 
-      <Section kicker="Cache" title="Copertine e audio features salvate in locale">
+      <Section kicker="Cache condivisa" title="Copertine, testi e audio features nel database">
         <CatalogCard />
       </Section>
 

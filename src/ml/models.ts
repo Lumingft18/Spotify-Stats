@@ -1,6 +1,6 @@
 // Behavioural / decision models computed locally on the listening history.
 import { query } from '../data/db';
-import { idb } from '../lib/idb';
+import { kv } from '../lib/kv';
 import { loadIndex, type EmbIndex } from './embeddings';
 import { auc, bootstrapCI, mean, rng, sd, shuffleInPlace } from './stats';
 import { MOOD_SQL } from '../lib/mood';
@@ -306,7 +306,7 @@ export async function detectEras(maxEras = 7, penalty = 0.04): Promise<Era[]> {
       name: cl[0]?.label ? `L’era ${cl[0].label}` : `L’era ${top[0]?.artist ?? ''}`,
     });
   }
-  const custom = (await idb.get<Record<string, string>>('era_names')) ?? {};
+  const custom = (await kv.get<Record<string, string>>('era_names')) ?? {};
   for (const e of eras) if (custom[`${e.from}_${e.to}`]) e.name = custom[`${e.from}_${e.to}`];
   return eras;
 }
@@ -486,8 +486,8 @@ export async function rediscoveryCandidates(n = 12, minGapDays = 180): Promise<C
     WHERE t.plays >= 5 AND t.skip_rate < 0.5
       AND date_diff('day', t.last_day, (SELECT max(day) FROM plays)) >= ${minGapDays}
     ORDER BY t.plays DESC LIMIT 600`);
-  const arms = (await idb.get<Arms>('bandit_arms')) ?? {};
-  const fb = (await idb.get<Record<string, number>>('bandit_feedback')) ?? {};
+  const arms = (await kv.get<Arms>('bandit_arms')) ?? {};
+  const fb = (await kv.get<Record<string, number>>('bandit_feedback')) ?? {};
   const scored = pool
     .filter((c) => fb[c.uri] == null)
     .map((c) => {
@@ -510,15 +510,15 @@ export async function rediscoveryCandidates(n = 12, minGapDays = 180): Promise<C
 }
 
 export async function rediscoveryFeedback(c: Candidate, liked: boolean) {
-  const arms = (await idb.get<Arms>('bandit_arms')) ?? {};
+  const arms = (await kv.get<Arms>('bandit_arms')) ?? {};
   const key = c.cluster == null ? 'none' : String(c.cluster);
   const arm = arms[key] ?? { a: 1, b: 1 };
   if (liked) arm.a += 1;
   else arm.b += 1;
   arms[key] = arm;
-  const fb = (await idb.get<Record<string, number>>('bandit_feedback')) ?? {};
+  const fb = (await kv.get<Record<string, number>>('bandit_feedback')) ?? {};
   fb[c.uri] = liked ? 1 : 0;
-  await idb.setMany([
+  await kv.setMany([
     ['bandit_arms', arms],
     ['bandit_feedback', fb],
   ]);

@@ -1,6 +1,6 @@
 // Small LLM helpers: naming clusters/eras and writing story captions. Numbers are passed in, never generated.
 import { query, setClusters } from '../data/db';
-import { idb } from '../lib/idb';
+import { kv } from '../lib/kv';
 import { getApp } from '../lib/store';
 import type { Era } from '../ml/models';
 import { structured } from './client';
@@ -74,7 +74,7 @@ export async function nameErasWithLLM(eras: Era[]): Promise<Record<string, strin
   });
   const names: Record<string, string> = {};
   for (const e of res.eras) names[e.key] = e.name.slice(0, 48);
-  await idb.set('era_names', names);
+  await kv.set('era_names', names);
   return names;
 }
 

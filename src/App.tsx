@@ -2,6 +2,9 @@ import { useEffect, lazy, Suspense } from 'react';
 import { prewarm, restore } from './data/db';
 import { afterDataLoaded } from './data/lifecycle';
 import { useApp, getApp } from './lib/store';
+import { apiAvailable } from './lib/api';
+import { analyses, currentAnalysisId, setCurrentAnalysis } from './lib/analyses';
+import { migrateLegacy } from './lib/migrate';
 import { useRoute } from './lib/router';
 import { Shell } from './components/Shell';
 import { Onboarding } from './features/onboarding/Onboarding';
@@ -72,18 +75,41 @@ function ReportRoute() {
   );
 }
 
+// React StrictMode runs effects twice in dev: boot (migration, restore) must happen once per page load.
+let booting: Promise<void> | null = null;
+const bootOnce = () => (booting ??= boot());
+
+/** Opens the analysis this browser had open (if it still exists); otherwise the start screen with the history. */
+async function boot() {
+  if (!(await apiAvailable())) {
+    getApp().set({ status: 'empty', serverUp: false });
+    return;
+  }
+  await migrateLegacy().catch((e) => console.warn('migrazione dati del browser', e));
+  const id = currentAnalysisId();
+  if (id) {
+    const a = await analyses.get(id).catch(() => null);
+    if (!a) setCurrentAnalysis(null);
+    else {
+      getApp().set({ analysis: a });
+      if (await restore()) return afterDataLoaded();
+      setCurrentAnalysis(null); // created but never filled (import interrupted): stays in the history list
+      getApp().set({ analysis: null });
+    }
+  }
+  getApp().set({ status: 'empty' });
+}
+
 export default function App() {
   const status = useApp((s) => s.status);
   const isReport = useRoute().path[0] === 'report';
 
   useEffect(() => {
     prewarm();
-    restore()
-      .then((ok) => (ok ? afterDataLoaded() : getApp().set({ status: 'empty' })))
-      .catch((e) => {
-        console.error(e);
-        getApp().set({ status: 'empty' });
-      });
+    void bootOnce().catch((e) => {
+      console.error(e);
+      getApp().set({ status: 'empty' });
+    });
   }, []);
 
   if (status === 'booting') {

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { ArrowUp, Database, Sparkles, Trash2, Square, KeyRound } from 'lucide-react';
 import { runAgent, type AgentMessage, type ChartSpec } from '../../llm/agent';
 import { useLlmAvailable } from '../../llm/client';
-import { idb } from '../../lib/idb';
+import { kv } from '../../lib/kv';
 import { useRoute, routes } from '../../lib/router';
 import { useApp } from '../../lib/store';
 import { Button, Card, ErrorNote, PageHeader, Spinner, cx } from '../../components/ui';
@@ -177,7 +177,7 @@ export default function AskPage() {
   const available = useLlmAvailable();
 
   useEffect(() => {
-    void idb.get<AgentMessage[]>('ask_history').then((h) => h && setHistory(h));
+    void kv.get<AgentMessage[]>('ask_history').then((h) => h && setHistory(h));
   }, []);
 
   const send = useCallback(
@@ -193,7 +193,7 @@ export default function AskPage() {
         const reply = await runAgent(next, setStep, ctrl.current.signal);
         const all = [...next, reply];
         setHistory(all);
-        await idb.set('ask_history', all.slice(-30));
+        await kv.set('ask_history', all.slice(-30));
       } catch (e) {
         if (!ctrl.current.signal.aborted) setErr(e instanceof Error ? e.message : String(e));
       } finally {
@@ -301,7 +301,7 @@ export default function AskPage() {
               aria-label="Nuova conversazione"
               onClick={() => {
                 setHistory([]);
-                void idb.del('ask_history');
+                void kv.del('ask_history');
               }}
               className="grid size-10 place-items-center rounded-full text-text-faint hover:bg-surface-2"
             >

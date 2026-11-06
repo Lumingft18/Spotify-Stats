@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { nameGradient } from '../lib/color';
 import { cx } from './ui';
+import { coverSrc } from '../lib/api';
 
 export function Cover({
   src,
@@ -36,7 +37,7 @@ export function Cover({
     >
       {src && !failed ? (
         <img
-          src={src}
+          src={coverSrc(src) ?? undefined}
           alt=""
           loading="lazy"
           decoding="async"

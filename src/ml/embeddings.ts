@@ -1,5 +1,7 @@
 import { query, upsertMeta, setClusters } from '../data/db';
-import { idb } from '../lib/idb';
+import { kv } from '../lib/kv';
+import { apiBytes } from '../lib/api';
+import { pack, unpack } from '../lib/pack';
 import { getApp } from '../lib/store';
 import { llm } from '../llm/client';
 import type { MlRequest, MlResponse } from './ml.worker';
@@ -79,13 +81,47 @@ export async function embedTexts(texts: string[], key: EmbedModelKey = DEFAULT_E
   return { vecs, dim };
 }
 
+// ---------- shared vector cache (local database) ----------
+// Same document + same model = same vector: cached by sha256 of the text, so rebuilding the map,
+// opening another analysis or another person's export never pays twice for a track.
+
+async function sha256(text: string): Promise<string> {
+  const d = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+  return Array.from(new Uint8Array(d), (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+const cacheModel = (key: EmbedModelKey) => `${EMBED_MODELS[key].id}@${EMBED_MODELS[key].dim}`;
+
+async function cachedVectors(key: EmbedModelKey, hashes: string[]): Promise<Map<string, Float32Array>> {
+  const out = new Map<string, Float32Array>();
+  try {
+    for (let i = 0; i < hashes.length; i += 2000) {
+      const bytes = await apiBytes('/embeddings/get', 'POST', JSON.stringify({ model: cacheModel(key), hashes: hashes.slice(i, i + 2000) }));
+      if (!bytes) continue;
+      const r = unpack<{ hashes: string[]; vecs: Uint8Array[] }>(bytes);
+      r.hashes.forEach((h, j) => {
+        const u = r.vecs[j];
+        out.set(h, new Float32Array(u.buffer, u.byteOffset, u.byteLength / 4));
+      });
+    }
+  } catch (e) {
+    console.warn('cache embedding non disponibile', e);
+  }
+  return out;
+}
+
+async function storeVectors(key: EmbedModelKey, hashes: string[], vecs: Float32Array, dim: number) {
+  const items = hashes.map((_, i) => new Uint8Array(vecs.slice(i * dim, (i + 1) * dim).buffer));
+  await apiBytes('/embeddings/put', 'POST', pack({ model: cacheModel(key), hashes, vecs: items })).catch((e) => console.warn('cache embedding', e));
+}
+
 // ---------- index persistence ----------
 
 let indexCache: EmbIndex | null | undefined;
 
 export async function loadIndex(): Promise<EmbIndex | null> {
   if (indexCache !== undefined) return indexCache;
-  const idx = (await idb.get<EmbIndex>('emb_index')) ?? null;
+  const idx = (await kv.get<EmbIndex>('emb_index')) ?? null;
   indexCache = idx && idx.model in EMBED_MODELS ? idx : null;
   return indexCache;
 }
@@ -128,25 +164,35 @@ export async function buildIndex(
   );
   const dim = EMBED_MODELS[key].dim;
   const vecs = new Float32Array(rows.length * dim);
+  const docs = rows.map((x) => buildDoc(x, key));
+  const hashes = await Promise.all(docs.map(sha256));
+  const cached = await cachedVectors(key, hashes);
+  const missing: number[] = [];
+  hashes.forEach((h, i) => {
+    const v = cached.get(h);
+    if (v && v.length === dim) vecs.set(v, i * dim);
+    else missing.push(i);
+  });
   const B = 96;
-  const batches: number[] = [];
-  for (let i = 0; i < rows.length; i += B) batches.push(i);
-  let done = 0;
+  const batches: number[][] = [];
+  for (let i = 0; i < missing.length; i += B) batches.push(missing.slice(i, i + B));
+  let done = rows.length - missing.length;
+  onProgress(missing.length ? 'Embedding brani via API' : 'Embedding dalla cache locale', done, rows.length);
   let cursor = 0;
   const worker = async () => {
     while (cursor < batches.length) {
       if (signal?.aborted) throw new DOMException('Annullato', 'AbortError');
-      const i = batches[cursor++];
-      const batch = rows.slice(i, i + B);
-      const r = await embedTexts(batch.map((x) => buildDoc(x, key)), key, signal);
-      vecs.set(r.vecs.subarray(0, batch.length * dim), i * dim);
-      done += batch.length;
+      const idx = batches[cursor++];
+      const r = await embedTexts(idx.map((i) => docs[i]), key, signal);
+      idx.forEach((i, j) => vecs.set(r.vecs.subarray(j * dim, (j + 1) * dim), i * dim));
+      await storeVectors(key, idx.map((i) => hashes[i]), r.vecs, dim);
+      done += idx.length;
       onProgress('Embedding brani via API', done, rows.length);
     }
   };
   await Promise.all([worker(), worker(), worker()]);
   const index: EmbIndex = { model: key, dim, uris: rows.map((r) => r.uri), vecs, builtAt: Date.now() };
-  await idb.set('emb_index', index);
+  await kv.set('emb_index', index);
   indexCache = index;
   await computeLayout(index, onProgress);
   progressCb = null;
@@ -207,7 +253,7 @@ export async function labelClusters() {
       ) GROUP BY cluster
     )
     SELECT ra.cluster, ra.artists, tg.tags FROM ra LEFT JOIN tg USING (cluster) ORDER BY cluster`);
-  const prev = new Map(((await idb.get<Array<{ id: number; label: string; custom?: boolean }>>('clusters')) ?? []).map((c) => [c.id, c]));
+  const prev = new Map(((await kv.get<Array<{ id: number; label: string; custom?: boolean }>>('clusters')) ?? []).map((c) => [c.id, c]));
   await setClusters(
     rows.map((r) => {
       const p = prev.get(r.cluster);

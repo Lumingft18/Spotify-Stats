@@ -22,5 +22,5 @@
     "noFallthroughCasesInSwitch": true,
     "noUncheckedSideEffectImports": true
   },
-  "include": ["vite.config.ts", "debugBridge.ts"]
+  "include": ["vite.config.ts", "debugBridge.ts", "server"]
 }

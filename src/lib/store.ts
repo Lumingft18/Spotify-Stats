@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type { AccountProfile } from '../data/account';
+import type { Analysis } from './analyses';
 
 export type ConnectionId = 'covers' | 'audiofeatures' | 'lyrics' | 'lastfm' | 'llm' | 'embedModel';
 
@@ -90,6 +91,10 @@ interface AppState {
   bounds: { min: string; max: string } | null;
   /** Personal "account data" package (name, library, playlists…) when uploaded, or a manually entered name. */
   profile: AccountProfile | null;
+  /** False when the local database server doesn't answer (e.g. a static build opened without `npm run dev`). */
+  serverUp: boolean;
+  /** The saved analysis currently open (null on the start screen). */
+  analysis: Analysis | null;
   /** What kind of listening history is loaded. */
   dataset: { historyKind: 'extended' | 'legacy'; rows: number } | null;
   /** Bumped whenever derived tables or the filter change → all queries re-run. */
@@ -112,6 +117,8 @@ export const useApp = create<AppState>((set, get) => ({
   range: { from: null, to: null },
   bounds: null,
   profile: null,
+  serverUp: true,
+  analysis: null,
   dataset: null,
   epoch: 0,
   settings: loadSettings(),

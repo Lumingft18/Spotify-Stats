@@ -35,3 +35,6 @@ StreamingHistory*.json
 
 # Reproducible analysis output (personal data)
 analysis-out/
+
+# Local database (analyses + shared catalog cache)
+data/

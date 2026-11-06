@@ -1,6 +1,6 @@
 # Ascolti — statistiche Spotify, local-first
 
-Analisi del tuo storico Spotify **interamente nel browser**: statistiche, ere musicali, mood, mappa del gusto con embedding, modelli comportamentali e un assistente che risponde sui tuoi dati.
+Analisi del tuo storico Spotify **in locale**: statistiche, ere musicali, mood, mappa del gusto con embedding, modelli comportamentali e un assistente che risponde sui tuoi dati. Ogni analisi ha un nome e resta salvata in un database SQLite sul tuo computer.
 
 ## Funzioni
 
@@ -14,9 +14,18 @@ Analisi del tuo storico Spotify **interamente nel browser**: statistiche, ere mu
 - **Confronta** — compatibilità con amici (salva solo aggregati).
 - **Impostazioni** — ogni servizio esterno è un interruttore; registro delle connessioni effettuate; cancellazione totale.
 
+## Database locale
+
+Il server locale (lo stesso di `npm run dev` / `Avvia Ascolti.command`) apre `data/ascolti.sqlite` (`node:sqlite`, nessuna dipendenza nativa; percorso cambiabile con `ASCOLTI_DB`) ed espone `/api` (vedi `server/api.ts`).
+
+- **Analisi**: all'avvio chiedi un nome (se carichi lo ZIP “Dati dell’account” lo prende da lì). Storico, arricchimento, chat, confronti di ogni analisi sono salvati a parte; la schermata iniziale mostra la cronologia (apri, rinomina, elimina). Si cambia analisi dal riquadro “Analisi” nella barra laterale.
+- **Catalogo condiviso** tra tutte le analisi e tutte le persone che usano questa installazione: URL copertina, audio features, testi, tag, ricerche già fatte, vettori di embedding (per hash del testo) e le immagini delle copertine, scaricate una volta e poi servite da `/api/img`. Le stime AI per brano (mood, positività del testo) stanno in una cache a parte, per modello + hash del prompt: la stessa canzone non si paga due volte; restano sempre etichettate come stime. Il benchmark riusa solo stime fatte con il suo protocollo (ancore di artisti diversi).
+- I dati salvati dalle versioni precedenti in IndexedDB vengono copiati nel database al primo avvio (gli originali restano intatti).
+- `data/` è in `.gitignore`: contiene dati personali.
+
 ## Privacy
 
-Nessun backend. I dati restano in IndexedDB. Servizi esterni solo se attivati: `open.spotify.com` (oEmbed copertine), `api.reccobeats.com` (audio features), `lrclib.net` (testi), `ws.audioscrobbler.com` (tag, con tua chiave), `openrouter.ai` (AI, con tua chiave).
+Nessun cloud: i dati restano nel database locale. Servizi esterni solo se attivati: `open.spotify.com` (oEmbed copertine), `api.reccobeats.com` (audio features), `lrclib.net` (testi), `ws.audioscrobbler.com` (tag, con tua chiave), `openrouter.ai` (AI, con tua chiave).
 
 ## Stack
 

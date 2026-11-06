@@ -2,28 +2,42 @@ import { useRef, useState } from 'react';
 import { Upload, ShieldCheck, Mail, FileArchive, Sparkles, Cpu } from 'lucide-react';
 import { useApp } from '../../lib/store';
 import { importFiles } from '../../data/lifecycle';
+import { hasAccountData } from '../../data/import';
 import { navigate, routes } from '../../lib/router';
 import { Button, ErrorNote, Spinner, cx } from '../../components/ui';
+import { SavedAnalyses } from './SavedAnalyses';
 
 export function Onboarding() {
   const status = useApp((s) => s.status);
   const step = useApp((s) => s.importStep);
   const set = useApp((s) => s.set);
+  const serverUp = useApp((s) => s.serverUp);
   const [error, setError] = useState<string | null>(null);
   const [drag, setDrag] = useState(false);
   const [name, setName] = useState('');
+  /** Files dropped before a name was given: kept so the person only has to type the name. */
+  const [pending, setPending] = useState<File[] | null>(null);
   const input = useRef<HTMLInputElement>(null);
+  const nameInput = useRef<HTMLInputElement>(null);
 
   const handle = async (list: FileList | File[] | null) => {
     const files = Array.from(list ?? []).filter((f) => /\.(zip|json)$/i.test(f.name));
+    if (input.current) input.current.value = ''; // the same file can be chosen again
     if (!files.length) {
       setError('Seleziona il file .zip esportato da Spotify (oppure i file .json al suo interno).');
       return;
     }
     setError(null);
+    if (!name.trim() && !(await hasAccountData(files).catch(() => false))) {
+      setPending(files);
+      setError('Dai un nome a questa analisi (es. il nome della persona), poi premi “Continua”. Con lo ZIP “Dati dell’account” il nome lo prendo da lì.');
+      nameInput.current?.focus();
+      return;
+    }
+    setPending(null);
     set({ status: 'importing', importStep: 'Preparazione…' });
     try {
-      const out = await importFiles(files, (s) => set({ importStep: s }), { mode: 'replace', name });
+      const out = await importFiles(files, (s) => set({ importStep: s }), { mode: 'replace', name, newAnalysis: true });
       // No full history yet → land on the overview, where a banner asks for the missing package.
       navigate(out.historyKind === 'extended' ? routes.story() : routes.overview());
     } catch (e) {
@@ -41,7 +55,7 @@ export function Onboarding() {
         <header className="flex items-center justify-between">
           <div className="display text-3xl">Ascolti</div>
           <div className="flex items-center gap-2 rounded-full border border-border bg-surface-1 px-3 py-1.5 text-xs text-text-muted">
-            <ShieldCheck size={14} className="text-good" /> 100% locale · nessun server
+            <ShieldCheck size={14} className="text-good" /> Database locale · niente cloud
           </div>
         </header>
 
@@ -54,7 +68,7 @@ export function Onboarding() {
             </h1>
             <p className="mt-6 max-w-md text-lg text-text-muted">
               Carica lo storico esteso di Spotify: statistiche, ere musicali, mood, una mappa del tuo gusto e un assistente a cui
-              fare domande. Tutto calcolato nel tuo browser.
+              fare domande. Ogni analisi resta salvata sul tuo computer e la ritrovi qui sotto.
             </p>
             <ol className="mt-8 space-y-4 text-sm">
               {[
@@ -73,7 +87,7 @@ export function Onboarding() {
                   ),
                 },
                 { icon: FileArchive, t: 'Aspetta le email', d: 'Arrivano due ZIP separati: i dati dell’account in ~5 giorni, la cronologia estesa fino a 30. Puoi caricarne uno subito e l’altro dopo.' },
-                { icon: Upload, t: 'Trascinali qui', d: 'Anche entrambi insieme. Non vengono caricati da nessuna parte: restano sul tuo dispositivo.' },
+                { icon: Upload, t: 'Dai un nome e trascinali qui', d: 'Anche entrambi insieme. Restano nel database locale di questa app: nessun cloud.' },
               ].map((s, i) => (
                 <li key={i} className="flex gap-3">
                   <span className="grid size-8 shrink-0 place-items-center rounded-full border border-border bg-surface-1 text-text-muted">
@@ -89,6 +103,26 @@ export function Onboarding() {
           </div>
 
           <div className="animate-rise [animation-delay:120ms]">
+            {!serverUp && (
+              <div className="mb-4">
+                <ErrorNote>
+                  Il database locale non risponde. Avvia l’app con “Avvia Ascolti.command” (o npm run dev): senza server le analisi non si possono salvare.
+                </ErrorNote>
+              </div>
+            )}
+            <label className="mb-4 flex flex-col gap-1.5 text-sm text-text-muted">
+              Nome dell’analisi
+              <input
+                ref={nameInput}
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && pending && name.trim() && void handle(pending)}
+                disabled={importing}
+                placeholder="es. Gianvito 2025 (facoltativo con lo ZIP “Dati dell’account”)"
+                aria-label="Nome dell’analisi"
+                className="h-10 min-w-0 rounded-full border border-border bg-surface-1 px-4 text-sm text-text placeholder:text-text-faint"
+              />
+            </label>
             <div
               role="button"
               tabIndex={0}
@@ -144,34 +178,33 @@ export function Onboarding() {
                 onChange={(e) => void handle(e.target.files)}
               />
             </div>
-            <label className="mt-4 flex items-center gap-3 text-sm text-text-muted">
-              Come ti chiami?
-              <input
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="facoltativo — lo prendo dai dati dell’account se ci sono"
-                aria-label="Il tuo nome"
-                className="h-9 min-w-0 flex-1 rounded-full border border-border bg-surface-1 px-4 text-sm text-text placeholder:text-text-faint"
-              />
-            </label>
             {error && (
               <div className="mt-4">
                 <ErrorNote>{error}</ErrorNote>
               </div>
             )}
+            {pending && !importing && (
+              <div className="mt-3 flex flex-wrap items-center gap-2 text-sm text-text-muted">
+                <span className="min-w-0 flex-1 truncate">In attesa: {pending.map((f) => f.name).join(', ')}</span>
+                <Button variant="primary" size="sm" disabled={!name.trim()} onClick={() => void handle(pending)}>
+                  Continua
+                </Button>
+              </div>
+            )}
             <div className="mt-6 grid grid-cols-3 gap-3 text-xs text-text-muted">
               <div className="flex items-center gap-2">
-                <Cpu size={14} /> Motore SQL nel browser
+                <Cpu size={14} /> Copertine e testi riusati
               </div>
               <div className="flex items-center gap-2">
                 <Sparkles size={14} /> AI solo se la attivi tu
               </div>
               <div className="flex items-center gap-2">
-                <ShieldCheck size={14} /> Cancelli tutto in un click
+                <ShieldCheck size={14} /> Analisi salvate in locale
               </div>
             </div>
           </div>
         </div>
+        <SavedAnalyses />
       </div>
     </div>
   );

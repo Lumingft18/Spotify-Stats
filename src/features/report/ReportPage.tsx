@@ -1,5 +1,6 @@
 // One-click PDF: a purpose-built A4 document (not screenshots of the app). Light paper, vector SVG charts,
 // small covers, every number from the same facts as the Racconto. Printed by the browser → "Salva come PDF".
+import { coverSrc } from '../../lib/api';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { ArrowLeft, FileDown, Printer } from 'lucide-react';
 import { query, getExcluded } from '../../data/db';
@@ -86,7 +87,7 @@ function Thumb({ src, name, size = 22, round = false }: { src?: string | null; n
   const [failed, setFailed] = useState(false);
   const style = { width: size, height: size, borderRadius: round ? '50%' : Math.max(3, size / 7) };
   if (!src || failed) return <span className="doc-thumb" style={{ ...style, background: nameGradient(name) }} aria-hidden />;
-  return <img className="doc-thumb" style={style} src={src} alt="" crossOrigin="anonymous" decoding="async" onError={() => setFailed(true)} />;
+  return <img className="doc-thumb" style={style} src={coverSrc(src) ?? undefined} alt="" crossOrigin="anonymous" decoding="async" onError={() => setFailed(true)} />;
 }
 
 function Page({ id, kicker, title, children }: { id: string; kicker: string; title: ReactNode; children: ReactNode }) {
