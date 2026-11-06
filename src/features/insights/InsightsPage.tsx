@@ -15,6 +15,7 @@ import { PlotChart, Plot } from '../../components/charts/PlotChart';
 import { StoryButton } from '../../components/StoryButton';
 import { periodLabel } from '../../lib/storyCard';
 import { useApp } from '../../lib/store';
+import { stopAll } from '../../enrichment/jobs';
 
 const usePeriod = () => periodLabel(useApp((s) => s.range));
 
@@ -479,7 +480,60 @@ function Reliability() {
   );
 }
 
+/** While enrichment runs, every few seconds new data bumps the epoch and all models would retrain:
+ *  the page waits for the activities to finish, then computes once. */
+function WaitForJobs() {
+  const jobs = useApp((s) => s.jobs);
+  const running = Object.values(jobs).filter((j) => j.status === 'running');
+  const set = useApp((s) => s.set);
+  return (
+    <Card className="flex flex-col gap-4">
+      <div className="flex items-center gap-3">
+        <Spinner />
+        <div>
+          <div className="font-medium text-text">I modelli partono quando finiscono le attività in corso</div>
+          <div className="text-sm text-text-muted">
+            Ogni nuovo dato (copertine, testi, mood…) li farebbe ricalcolare da capo ogni pochi secondi. Questa pagina si apre da sola appena è tutto pronto.
+          </div>
+        </div>
+      </div>
+      <ul className="flex flex-col gap-2">
+        {running.map((j) => (
+          <li key={j.id} className="text-sm">
+            <div className="flex justify-between gap-3">
+              <span className="text-text">{j.label}</span>
+              <span className="num text-text-faint">
+                {fmtInt(j.done)} / {fmtInt(j.total)}
+              </span>
+            </div>
+            <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-surface-3">
+              <div className="h-full rounded-full bg-[var(--accent)]" style={{ width: `${j.total ? Math.min(100, (100 * j.done) / j.total) : 0}%` }} />
+            </div>
+            {j.detail && <div className="mt-0.5 text-xs text-text-faint">{j.detail}</div>}
+          </li>
+        ))}
+      </ul>
+      <div className="flex flex-wrap gap-2">
+        <Button size="sm" variant="secondary" onClick={() => set({ activityOpen: true })}>
+          Apri Attività
+        </Button>
+        <Button size="sm" variant="ghost" onClick={() => stopAll()} title="Mette in pausa l’arricchimento; riprende con “Avvia” in Attività">
+          Metti in pausa e apri ora
+        </Button>
+      </div>
+    </Card>
+  );
+}
+
 export default function InsightsPage() {
+  const busy = useApp((s) => Object.values(s.jobs).some((j) => j.status === 'running'));
+  if (busy)
+    return (
+      <div className="flex flex-col gap-14">
+        <PageHeader kicker="Modelli" title="Cosa dicono i modelli" sub="Modelli statistici addestrati sul tuo storico. Ogni risultato spiega come è stato calcolato." />
+        <WaitForJobs />
+      </div>
+    );
   return (
     <div className="flex flex-col gap-14">
       <PageHeader kicker="Modelli" title="Cosa dicono i modelli" sub="Modelli statistici addestrati nel tuo browser sul tuo storico. Ogni risultato spiega come è stato calcolato." />
