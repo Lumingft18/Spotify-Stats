@@ -143,7 +143,8 @@ const artistTagCache = new Map<string, string>();
 
 /** Top tags from Last.fm (track, then artist fallback). Requires the user's API key. */
 export async function fetchTags(t: TrackRef, apiKey: string, signal: AbortSignal): Promise<MetaRow | null> {
-  const base = 'https://ws.audioscrobbler.com/2.0/?format=json&autocorrect=1&api_key=' + encodeURIComponent(apiKey);
+  // Through the local server: identifying User-Agent + paced queue (see server/api.ts).
+  const base = '/api/lastfm?autocorrect=1&api_key=' + encodeURIComponent(apiKey);
   const pick = (tags: Array<{ name: string; count: number }> | undefined) =>
     (tags ?? [])
       .filter((x) => x.count >= 10 && x.name.length < 30)

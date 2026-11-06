@@ -23,6 +23,7 @@
 //   POST   /api/ai/get              {kind, model, version, uris} → [{uri, value}]
 //   POST   /api/ai/put              {kind, model, version, items: [{uri, value}]}
 //   GET    /api/mb/artist?query=…              MusicBrainz artist search, proxied with an identifying User-Agent and paced
+//   GET    /api/lastfm?method=…&…                Last.fm API, proxied with an identifying User-Agent and paced (4/s)
 //   GET    /api/img?u=<cover url>              cover image, downloaded once then served from the database
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { resolve } from 'node:path'
@@ -90,6 +91,18 @@ async function mbFetch(path: string): Promise<Response> {
     headers: { 'user-agent': MB_UA, accept: 'application/json' },
     signal: AbortSignal.timeout(20_000),
   })
+}
+
+// Last.fm: identifying User-Agent (their docs: lowers the ban risk) and ≤ 5 req/s averaged → 250 ms gap.
+const LASTFM_GAP_MS = 250
+let lastfmNext = 0
+async function lastfmFetch(qs: URLSearchParams): Promise<Response> {
+  const now = Date.now()
+  const at = Math.max(now, lastfmNext)
+  lastfmNext = at + LASTFM_GAP_MS
+  if (at > now) await new Promise((r) => setTimeout(r, at - now))
+  qs.set('format', 'json')
+  return fetch(`https://ws.audioscrobbler.com/2.0/?${qs}`, { headers: { 'user-agent': MB_UA }, signal: AbortSignal.timeout(20_000) })
 }
 
 const inflightImg = new Map<string, Promise<{ mime: string; data: Uint8Array } | null>>()
@@ -205,6 +218,15 @@ export function createHandler(store: Store): Connect.NextHandleFunction {
         res.setHeader('content-type', 'application/json; charset=utf-8')
         const ra = r.headers.get('retry-after')
         if (ra) res.setHeader('retry-after', ra)
+        return res.end(Buffer.from(await r.arrayBuffer()))
+      }
+
+      if (a === 'lastfm' && !b && m === 'GET') {
+        const qs = new URLSearchParams(url.searchParams)
+        if (!/^(track|artist)\.gettoptags$/i.test(qs.get('method') ?? '')) throw new HttpError(400, 'metodo Last.fm non consentito')
+        const r = await lastfmFetch(qs)
+        res.statusCode = r.status
+        res.setHeader('content-type', 'application/json; charset=utf-8')
         return res.end(Buffer.from(await r.arrayBuffer()))
       }
 

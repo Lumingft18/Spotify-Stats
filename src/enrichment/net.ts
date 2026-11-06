@@ -33,9 +33,9 @@ async function waitTurn(host: string, signal?: AbortSignal | null) {
 
 /** fetch() wrapper: paces each host, logs every outbound host (shown in Settings → Connessioni) and retries 429/5xx with backoff. */
 export async function netFetch(url: string, purpose: string, init: RequestInit = {}, retries = 3): Promise<Response> {
-  const local = url.startsWith('/api/mb/');
-  const host = local ? 'musicbrainz.org' : new URL(url).host;
-  getApp().logNet(local ? 'musicbrainz.org (via server locale)' : host, purpose);
+  const local = url.startsWith('/api/mb/') || url.startsWith('/api/lastfm');
+  const host = local ? (url.startsWith('/api/mb/') ? 'musicbrainz.org' : 'ws.audioscrobbler.com') : new URL(url).host;
+  getApp().logNet(local ? `${host} (via server locale)` : host, purpose);
   let attempt = 0;
   for (;;) {
     if (!local) await waitTurn(host, init.signal);
