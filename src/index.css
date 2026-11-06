@@ -224,12 +224,18 @@ section.is-visible .story-reveal { opacity: 1; transform: none; }
 .doc-daylist { margin-top: 2.5mm; display: flex; flex-direction: column; gap: 1.4mm; font-size: 8.5pt; }
 .doc-daylist li { display: grid; grid-template-columns: auto 1fr auto; gap: 2mm; align-items: center; min-width: 0; }
 .doc-note { margin-top: 6mm; font-size: 7.5pt; color: var(--faint); }
+.doc-eras { display: flex; flex-direction: column; gap: 5mm; border-left: 1px solid var(--rule); padding-left: 6mm; }
+.doc-era { position: relative; break-inside: avoid; }
+.doc-era::before { content: ''; position: absolute; left: calc(-6mm - 4px); top: 1.4mm; width: 7px; height: 7px; border-radius: 50%; background: var(--accent-doc); }
+.doc-era-t { font-family: var(--font-display); font-size: 19pt; line-height: 1.15; margin-top: 0.5mm; }
+.doc-era-a { margin-top: 1.5mm; font-size: 9pt; color: var(--muted); }
 
 @page { size: A4; margin: 0; }
 @media print {
   /* Dark paper, like the app: keep every background even if "Grafica di sfondo" is off. */
   html.report-mode, html.report-mode body { background: var(--color-bg) !important; color-scheme: dark; }
-  html.report-mode * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+  /* html itself too (`*` doesn't match it): its background paints the rest of the last sheet, otherwise white. */
+  html.report-mode, html.report-mode * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
   .no-print { display: none !important; }
   .report-root { background: var(--color-bg); padding: 0; }
   .doc { width: 210mm; margin: 0; }

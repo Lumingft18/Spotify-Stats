@@ -10,11 +10,13 @@ import { HOUR_DOW_SQL, KPI_SQL, MONTHLY_SQL, topSql, type Kpi, type TopRow } fro
 import { useApp } from '../../lib/store';
 import { periodLabel } from '../../lib/storyCard';
 import { countryName, DOW, DOW_LONG, fmtDate, fmtHours, fmtInt, fmtMonth, fmtPct, monthShort } from '../../lib/format';
-import { getMood, MOOD_HEX, MOOD_SQL, MOODS, moodLabel, type Mood } from '../../lib/mood';
+import { getMood, MOOD_HEX, MOOD_SQL, moodLabel, type Mood } from '../../lib/mood';
 import { nameGradient } from '../../lib/color';
 import { Button, Spinner } from '../../components/ui';
 import { runAllEnabled, stopAll } from '../../enrichment/jobs';
 import { holdEnrichment } from '../../enrichment/pause';
+import { ArtistsPage, CalendarPage, ErasPage, MapPage, MoodOverTime, SessionKinds, SkipPage } from './ReportExtra';
+import { loadExtra, reasonLabel, type ExtraData } from './reportExtraData';
 
 // SVG colours come from the app's theme tokens (same dark look as on screen).
 const ACCENT = { fill: 'var(--accent-doc)' } as const;
@@ -34,13 +36,14 @@ interface ReportData {
   discovery: Array<{ year: number; n: number }>;
   moodYears: Array<{ year: number; mood: Mood; minutes: number }>;
   excluded: number;
+  x: ExtraData;
 }
 
 async function loadReport(from: string | null, to: string | null): Promise<ReportData | null> {
   const f = await loadFacts(rangeWhere(from, to), 0);
   if (!f) return null;
   const [k] = await query<Kpi>(KPI_SQL);
-  const [monthly, heat, artists, tracks, albums, platforms, countries, endings, discovery, moodYears, excluded] = await Promise.all([
+  const [monthly, heat, artists, tracks, albums, platforms, countries, endings, discovery, moodYears, excluded, x] = await Promise.all([
     query<{ ym: string; minutes: number }>(MONTHLY_SQL),
     query<{ dow: number; hour: number; avg_minutes: number }>(HOUR_DOW_SQL),
     query<TopRow>(topSql('artists', 'minutes', 20)),
@@ -48,14 +51,15 @@ async function loadReport(from: string | null, to: string | null): Promise<Repor
     query<TopRow>(topSql('albums', 'minutes', 12)),
     query<{ label: string; minutes: number }>(`SELECT platform AS label, sum(minutes) AS minutes FROM p GROUP BY 1 ORDER BY 2 DESC`),
     query<{ label: string; minutes: number; days: number }>(`SELECT country AS label, sum(minutes) AS minutes, count(DISTINCT day) AS days FROM p GROUP BY 1 ORDER BY 2 DESC LIMIT 8`),
-    query<{ label: string; n: number }>(`SELECT coalesce(reason_end, '—') AS label, count(*) AS n FROM p GROUP BY 1 ORDER BY 2 DESC LIMIT 6`),
+    query<{ label: string; n: number }>(`SELECT coalesce(reason_end, '—') AS label, count(*) AS n FROM p GROUP BY 1 ORDER BY 2 DESC LIMIT 8`),
     query<{ year: number; n: number }>(`
       WITH f AS (SELECT artist, min(day) AS d FROM plays WHERE kind = 'track' AND counted GROUP BY artist)
       SELECT year(d) AS year, count(*) AS n FROM f WHERE d BETWEEN (SELECT min(day) FROM p) AND (SELECT max(day) FROM p) GROUP BY 1 ORDER BY 1`),
     query<{ year: number; mood: Mood; minutes: number }>(`SELECT year(day) AS year, ${MOOD_SQL('valence', 'energy')} AS mood, sum(minutes) AS minutes FROM p GROUP BY ALL`),
     getExcluded(),
+    loadExtra(),
   ]);
-  return { f, k, monthly, heat, artists, tracks, albums, platforms, countries, endings, discovery, moodYears, excluded: excluded.length };
+  return { f, k, monthly, heat, artists, tracks, albums, platforms, countries, endings, discovery, moodYears, excluded: excluded.length, x };
 }
 
 /** Ready = data loaded and every image settled — stable for 1.5 s. */
@@ -286,7 +290,10 @@ function narrative(f: Facts, k: Kpi): Array<{ title: string; text: string }> {
       text: `${f.artist.artist} ti ha accompagnato più di chiunque altro: ${fmtHours(f.artist.minutes)}, il ${fmtPct(f.artist.share)} del tuo tempo. Seguono ${f.artists5
         .slice(1)
         .map((a) => a.artist)
-        .join(', ')}. In tutto ${fmtInt(f.artistsCount)} artisti, di cui ${fmtInt(f.newArtists)} scoperti per la prima volta${f.newTop ? ` (il più ascoltato tra i nuovi: ${f.newTop.artist})` : ''}.`,
+        .join(', ')}. In tutto ${fmtInt(f.artistsCount)} artisti${
+        // On the whole history every artist is "new": the split only means something for a sub-period.
+        f.newArtists < f.artistsCount ? `, di cui ${fmtInt(f.newArtists)} scoperti per la prima volta${f.newTop ? ` (il più ascoltato tra i nuovi: ${f.newTop.artist})` : ''}` : ''
+      }.`,
     });
   if (f.tracks5[0])
     out.push({
@@ -414,20 +421,35 @@ function Report({ r, name, range, today }: { r: ReportData; name: string | null;
   const { f, k } = r;
   const story = narrative(f, k);
   const topMonthIdx = r.monthly.findIndex((m) => m.ym === f.topMonth?.ym);
-  const years = f.byYear.map((y) => y.year);
-  const moodYear = years.map((y) => {
-    const rows = r.moodYears.filter((m) => m.year === y && m.mood !== 'sconosciuto');
-    const tot = rows.reduce((s, m) => s + m.minutes, 0);
-    const all = r.moodYears.filter((m) => m.year === y).reduce((s, m) => s + m.minutes, 0);
-    return {
-      year: y,
-      cover: all ? tot / all : 0,
-      mix: MOODS.map((m) => ({ mood: m.id as Mood, share: tot ? (rows.find((x) => x.mood === m.id)?.minutes ?? 0) / tot : 0 })).filter((m) => m.share > 0),
-    };
-  });
   const totalPlatform = r.platforms.reduce((s, p) => s + p.minutes, 0) || 1;
   const totalEnd = r.endings.reduce((s, p) => s + p.n, 0) || 1;
   const monthLabels = r.monthly.map((m) => (m.ym.endsWith('-01') ? m.ym.slice(0, 4) : ''));
+  const allTime = !range.from && !range.to;
+  const x = r.x;
+  // Page order; optional pages appear only when their data exists. Numbers and the contents follow this list.
+  const TITLES: Record<string, string> = {
+    story: 'Il racconto',
+    years: 'Anno per anno',
+    time: 'Quando ascolti',
+    calendar: 'Calendario',
+    top: 'Classifiche',
+    albums: 'Album e momenti',
+    mood: 'Mood',
+    map: 'Mappa del gusto',
+    eras: 'Le tue ere',
+    artists: 'Artisti nel tempo',
+    skip: 'Quando salti',
+    habits: 'Abitudini',
+  };
+  const has: Record<string, boolean> = {
+    calendar: x.daily.length >= 14,
+    map: !!x.map && x.map.points.length >= 30,
+    eras: x.eras.length >= 2,
+    artists: !!x.survival && x.survival.curve.length >= 3,
+    skip: !!x.skip,
+  };
+  const order = Object.keys(TITLES).filter((id) => has[id] ?? true);
+  const kick = (id: string) => `${String(order.indexOf(id) + 2).padStart(2, '0')} · ${TITLES[id]}`;
 
   return (
     <>
@@ -443,7 +465,7 @@ function Report({ r, name, range, today }: { r: ReportData; name: string | null;
             { label: 'ore di ascolto', value: fmtInt(f.minutes / 60), sub: `${fmtInt(f.minutes / 60 / 24)} giorni interi` },
             { label: 'ascolti', value: fmtInt(k.plays), sub: `${fmtInt(k.sessions)} sessioni` },
             { label: 'brani diversi', value: fmtInt(f.uniqueTracks) },
-            { label: 'artisti', value: fmtInt(f.artistsCount), sub: `${fmtInt(f.newArtists)} nuovi` },
+            { label: 'artisti', value: fmtInt(f.artistsCount), sub: allTime ? undefined : `${fmtInt(f.newArtists)} nuovi` },
             { label: 'giorni con musica', value: fmtInt(f.activeDays), sub: `su ${fmtInt(f.days)}` },
             { label: 'mood prevalente', value: f.mood ? moodLabel(f.mood.mood) : '—', sub: f.mood ? fmtPct(f.mood.share) : undefined },
           ]}
@@ -481,9 +503,9 @@ function Report({ r, name, range, today }: { r: ReportData; name: string | null;
           )}
         </div>
         <ol className="doc-toc">
-          {['Il racconto', 'Anno per anno', 'Quando ascolti', 'Classifiche', 'Album e momenti', 'Mood', 'Abitudini'].map((t, i) => (
-            <li key={t}>
-              <span className="doc-num doc-sub">{String(i + 2).padStart(2, '0')}</span> {t}
+          {order.map((id, i) => (
+            <li key={id}>
+              <span className="doc-num doc-sub">{String(i + 2).padStart(2, '0')}</span> {TITLES[id]}
             </li>
           ))}
         </ol>
@@ -494,7 +516,7 @@ function Report({ r, name, range, today }: { r: ReportData; name: string | null;
       </section>
 
       {/* 2 · Story */}
-      <Page id="story" kicker="02 · Il racconto" title="La tua storia in numeri">
+      <Page id="story" kicker={kick('story')} title="La tua storia in numeri">
         <div className="doc-story">
           {story.map((p) => (
             <div key={p.title} className="doc-para">
@@ -506,7 +528,7 @@ function Report({ r, name, range, today }: { r: ReportData; name: string | null;
       </Page>
 
       {/* 3 · Years */}
-      <Page id="years" kicker="03 · Anno per anno" title={f.byYear.length > 1 ? `${f.byYear.length} anni di musica` : `Il ${f.byYear[0]?.year}`}>
+      <Page id="years" kicker={kick('years')} title={f.byYear.length > 1 ? `${f.byYear.length} anni di musica` : `Il ${f.byYear[0]?.year}`}>
         <BarChart values={f.byYear.map((y) => y.minutes / 60)} labels={f.byYear.map((y) => String(y.year))} height={140} highlight={f.byYear.reduce((b, y, i, a) => (y.minutes > a[b].minutes ? i : b), 0)} />
         <table className="doc-table">
           <thead>
@@ -549,7 +571,7 @@ function Report({ r, name, range, today }: { r: ReportData; name: string | null;
       </Page>
 
       {/* 4 · When */}
-      <Page id="time" kicker="04 · Quando ascolti" title={f.topMonth ? `Il mese più intenso: ${fmtMonth(f.topMonth.ym)}` : 'Il ritmo'}>
+      <Page id="time" kicker={kick('time')} title={f.topMonth ? `Il mese più intenso: ${fmtMonth(f.topMonth.ym)}` : 'Il ritmo'}>
         <H3>Ore per mese</H3>
         <BarChart values={r.monthly.map((m) => m.minutes / 60)} labels={r.monthly.length > 24 ? monthLabels : r.monthly.map((m) => monthShort(Number(m.ym.slice(5))))} height={150} highlight={topMonthIdx} />
         <H3>Minuti medi per giorno della settimana e ora</H3>
@@ -566,8 +588,10 @@ function Report({ r, name, range, today }: { r: ReportData; name: string | null;
         />
       </Page>
 
+      {has.calendar && <CalendarPage x={x} kicker={kick('calendar')} />}
+
       {/* 5 · Charts */}
-      <Page id="top" kicker="05 · Classifiche" title="Chi e cosa hai ascoltato di più">
+      <Page id="top" kicker={kick('top')} title="Chi e cosa hai ascoltato di più">
         <div className="doc-cols">
           <div>
             <H3>Artisti</H3>
@@ -581,7 +605,7 @@ function Report({ r, name, range, today }: { r: ReportData; name: string | null;
       </Page>
 
       {/* 6 · Albums & moments */}
-      <Page id="albums" kicker="06 · Album e momenti" title="Gli album e i brani che hanno lasciato il segno">
+      <Page id="albums" kicker={kick('albums')} title="Gli album e i brani che hanno lasciato il segno">
         <div className="doc-cols">
           <div>
             <H3>Album</H3>
@@ -644,7 +668,7 @@ function Report({ r, name, range, today }: { r: ReportData; name: string | null;
       </Page>
 
       {/* 7 · Mood */}
-      <Page id="mood" kicker="07 · Mood" title={f.mood ? `Il tuo suono è soprattutto ${moodLabel(f.mood.mood).toLowerCase()}` : 'Il mood dei tuoi ascolti'}>
+      <Page id="mood" kicker={kick('mood')} title={f.mood ? `Il tuo suono è soprattutto ${moodLabel(f.mood.mood).toLowerCase()}` : 'Il mood dei tuoi ascolti'}>
         {f.moodMix.length > 0 ? (
           <>
             <MoodBar mix={f.moodMix} height={14} />
@@ -656,20 +680,7 @@ function Report({ r, name, range, today }: { r: ReportData; name: string | null;
               ))}
               <span className="doc-sub">mood noto per il {fmtPct(f.moodCoverage)} del tempo</span>
             </div>
-            {moodYear.length > 1 && (
-              <>
-                <H3>Anno per anno</H3>
-                <div className="doc-moodyears">
-                  {moodYear.map((y) => (
-                    <div key={y.year} className="doc-moodyear">
-                      <span className="doc-num doc-strong">{y.year}</span>
-                      <MoodBar mix={y.mix} />
-                      <span className="doc-sub doc-num">{fmtPct(y.cover)} noto</span>
-                    </div>
-                  ))}
-                </div>
-              </>
-            )}
+            <MoodOverTime x={x} />
             <H3>Giorni felici, giorni tristi</H3>
             <div className="doc-grid2">
               {f.happyDay && <DayCard title="Il giorno più felice" d={f.happyDay} color={MOOD_HEX.euforico} />}
@@ -712,8 +723,13 @@ function Report({ r, name, range, today }: { r: ReportData; name: string | null;
         )}
       </Page>
 
+      {has.map && <MapPage x={x} kicker={kick('map')} />}
+      {has.eras && <ErasPage x={x} kicker={kick('eras')} />}
+      {has.artists && <ArtistsPage x={x} kicker={kick('artists')} />}
+      {has.skip && <SkipPage x={x} kicker={kick('skip')} />}
+
       {/* 8 · Habits */}
-      <Page id="habits" kicker="08 · Abitudini" title="Come ascolti">
+      <Page id="habits" kicker={kick('habits')} title="Come ascolti">
         <Kpis
           items={[
             { label: 'brani saltati', value: fmtPct(f.skip) },
@@ -726,9 +742,9 @@ function Report({ r, name, range, today }: { r: ReportData; name: string | null;
         <div className="doc-cols">
           <div>
             <H3>Dispositivi</H3>
-            <HBars rows={r.platforms.map((p) => ({ label: p.label, value: p.minutes / totalPlatform }))} fmt={(v) => fmtPct(v)} />
+            <HBars rows={r.platforms.map((p) => ({ label: p.label, value: p.minutes / totalPlatform })).filter((p) => p.value >= 0.005)} fmt={(v) => fmtPct(v)} />
             <H3>Come finisce un brano</H3>
-            <HBars rows={r.endings.map((p) => ({ label: p.label, value: p.n / totalEnd }))} fmt={(v) => fmtPct(v)} />
+            <HBars rows={r.endings.map((p) => ({ label: reasonLabel(p.label), value: p.n / totalEnd })).filter((p) => p.value >= 0.005)} fmt={(v) => fmtPct(v)} />
           </div>
           <div>
             <H3>Paesi</H3>
@@ -736,9 +752,10 @@ function Report({ r, name, range, today }: { r: ReportData; name: string | null;
             {r.discovery.length > 1 && (
               <>
                 <H3>Artisti scoperti per anno</H3>
-                <BarChart values={r.discovery.map((d) => d.n)} labels={r.discovery.map((d) => String(d.year))} height={120} />
+                <HBars rows={r.discovery.map((d) => ({ label: String(d.year), value: d.n }))} fmt={(v) => `${fmtInt(v)} artisti`} />
               </>
             )}
+            <SessionKinds x={x} />
           </div>
         </div>
         <p className="doc-note">

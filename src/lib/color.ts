@@ -92,3 +92,6 @@ export function nameGradient(name: string): string {
   const b = (a + 40 + ((h >> 8) % 60)) % 360;
   return `linear-gradient(135deg, hsl(${a} 45% 32%), hsl(${b} 55% 22%))`;
 }
+
+/** Colours of the taste-map groups (same in the app and in the PDF). */
+export const CLUSTER_COLORS = ['#e8b94a', '#5cc6c0', '#e0604f', '#7f7bd6', '#8fd16a', '#e98ac0', '#4fa3e0', '#d9a066', '#b5e3d8', '#c7a3ff', '#f2d16b', '#6fd6a8', '#ff9f7a', '#9ab0ff'];

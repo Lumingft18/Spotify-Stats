@@ -1,3 +1,4 @@
+import { CLUSTER_COLORS } from '../../lib/color';
 import { AXIS_MIN_R, genreLandmarks, mapAxes } from '../../ml/mapAxes';
 import { LimitSelect } from '../../components/LimitSelect';
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -25,7 +26,6 @@ import { MOOD_AI_JOB, startMoodAi, stopMoodAi } from '../../enrichment/moodAi';
 import { StoryButton } from '../../components/StoryButton';
 import { periodLabel } from '../../lib/storyCard';
 
-const CLUSTER_COLORS = ['#e8b94a', '#5cc6c0', '#e0604f', '#7f7bd6', '#8fd16a', '#e98ac0', '#4fa3e0', '#d9a066', '#b5e3d8', '#c7a3ff', '#f2d16b', '#6fd6a8', '#ff9f7a', '#9ab0ff'];
 
 interface MapRow {
   uri: string;
