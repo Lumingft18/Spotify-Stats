@@ -4,7 +4,6 @@
 // estimates are written only if it beats a constant guess, and earlier estimates are withdrawn if not.
 import { lyricsValenceCandidates, moodCandidates, rejectAiEstimates, runLyricsValence, runMoodV2, type MoodRunReport } from '../llm/mood';
 import { currentBench, runMoodBench } from '../llm/moodBench';
-import { sageAvailable } from '../llm/sage';
 import { applyMoodAdjustments } from '../data/moodAdjust';
 import { exec, persistMeta } from '../data/db';
 import { idb } from '../lib/idb';
@@ -24,19 +23,14 @@ export function stopMoodAi() {
 
 export function moodAiAvailable(): boolean {
   const s = getApp().settings;
-  if (s.moodProvider === 'sage') return sageAvailable();
   return s.connections.llm && !!s.openrouterKey;
 }
 
-const lyricsAvailable = () => {
-  const s = getApp().settings;
-  return s.connections.llm && !!s.openrouterKey;
-};
+const lyricsAvailable = moodAiAvailable;
 
 export async function startMoodAi(opts: { limit: number; samples?: 1 | 2 | 3 }): Promise<MoodRunReport | null> {
   if (ctrl || (!moodAiAvailable() && !lyricsAvailable())) return null;
   const app = getApp();
-  const provider = app.settings.moodProvider;
   const c = new AbortController();
   ctrl = c;
   let done = 0;
@@ -54,18 +48,18 @@ export async function startMoodAi(opts: { limit: number; samples?: 1 | 2 | 3 }):
     let report: MoodRunReport | null = null;
     // 1) Tracks without audio features: valence + energy from lyrics and tags, only if the estimator passes the benchmark.
     if (moodAiAvailable() && (await moodCandidates(1)).length) {
-      let b = await currentBench(provider);
+      let b = await currentBench();
       if (!b) {
         phase = 'verifica dello stimatore su brani misurati (benchmark)';
-        await runMoodBench({ providers: [provider], signal: c.signal, onProgress: (_l, d, t) => progress(d, t) });
-        b = await currentBench(provider);
+        await runMoodBench({ signal: c.signal, onProgress: (_l, d, t) => progress(d, t) });
+        b = await currentBench();
       }
       if (!c.signal.aborted && b) {
         if (b.result.useful.valence) {
           phase = 'brani senza audio features: stima da testo e tag';
           report = await runMoodV2({ limit: opts.limit, samples: opts.samples ?? 2, bench: b.bench, signal: c.signal, onProgress: progress });
         } else {
-          const n = await rejectAiEstimates(provider === 'sage' ? 'sage' : 'llm');
+          const n = await rejectAiEstimates();
           note = `stimatore non affidabile sul benchmark (r valence ${b.result.valence.r.toFixed(2)}): nessuna stima scritta${n ? `, ${n} stime precedenti ritirate` : ''}`;
         }
       }
@@ -105,7 +99,7 @@ export async function autoMoodAi(): Promise<void> {
   await requeueOldEstimates();
   const s = getApp().settings;
   if (!s.autoMoodAi || (!moodAiAvailable() && !lyricsAvailable()) || ctrl || isEnrichmentHeld()) return;
-  const b = await currentBench(s.moodProvider);
+  const b = await currentBench();
   const moodTodo = moodAiAvailable() && (await moodCandidates(1)).length > 0 && (!b || b.result.useful.valence);
   if (!moodTodo && !(lyricsAvailable() && (await lyricsValenceCandidates(1)).length)) return;
   await startMoodAi({ limit: s.autoMoodAiLimit }).catch(() => undefined);

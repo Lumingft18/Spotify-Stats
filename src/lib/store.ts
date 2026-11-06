@@ -1,17 +1,12 @@
 import { create } from 'zustand';
 import type { AccountProfile } from '../data/account';
 
-export type ConnectionId = 'covers' | 'audiofeatures' | 'lyrics' | 'lastfm' | 'llm' | 'embedModel' | 'sage';
-export type MoodProvider = 'openrouter' | 'sage';
+export type ConnectionId = 'covers' | 'audiofeatures' | 'lyrics' | 'lastfm' | 'llm' | 'embedModel';
 
 export interface Settings {
   timeZone: string;
   openrouterKey: string;
   lastfmKey: string;
-  /** Levanto Sage key (decision model), optional alternative mood estimator. */
-  sageKey: string;
-  /** Which service estimates mood for tracks without audio features. */
-  moodProvider: MoodProvider;
   llmModelBulk: string;
   llmModelAgent: string;
   connections: Record<ConnectionId, boolean>;
@@ -34,8 +29,6 @@ const defaultSettings: Settings = {
   timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/Rome',
   openrouterKey: '',
   lastfmKey: '',
-  sageKey: '',
-  moodProvider: 'openrouter',
   llmModelBulk: 'anthropic/claude-haiku-5.5',
   llmModelAgent: 'anthropic/claude-sonnet-5.5',
   autoMoodAi: true,
@@ -49,7 +42,6 @@ const defaultSettings: Settings = {
     lastfm: true,
     llm: false,
     embedModel: true,
-    sage: false,
   },
 };
 
@@ -59,10 +51,9 @@ function withEnv(s: Settings): Settings {
     ...s,
     openrouterKey: e.openrouterKey || s.openrouterKey,
     lastfmKey: e.lastfmKey || s.lastfmKey,
-    sageKey: e.sageKey || s.sageKey,
     llmModelBulk: e.llmModelBulk || s.llmModelBulk,
     llmModelAgent: e.llmModelAgent || s.llmModelAgent,
-    connections: { ...s.connections, llm: e.openrouterKey ? true : s.connections.llm, sage: e.sageKey ? true : s.connections.sage },
+    connections: { ...s.connections, llm: e.openrouterKey ? true : s.connections.llm },
   };
 }
 

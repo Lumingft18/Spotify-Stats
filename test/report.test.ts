@@ -3,7 +3,7 @@
 //
 //   ANALYSIS_ZIP=/path/export.zip npm run analysis
 //   ANALYSIS_META=/path/enrichment.json   # optional: enrichment exported from Impostazioni (mood, testi, tag)
-//   ANALYSIS_BENCH=1                      # optional: also run the mood benchmark (uses the OpenRouter / Sage keys
+//   ANALYSIS_BENCH=1                      # optional: also run the mood benchmark (uses the OpenRouter key
 //                                         #           from .env.local; costs a few cents)
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
@@ -77,8 +77,7 @@ describe.skipIf(!enabled)('analysis report', () => {
       const { runMoodBench } = await import('../src/llm/moodBench');
       const { getApp } = await import('../src/lib/store');
       const s = getApp().settings;
-      const providers = [...(s.openrouterKey ? (['openrouter'] as const) : []), ...(s.sageKey ? (['sage'] as const) : [])];
-      if (providers.length) bench = await runMoodBench({ providers: [...providers], n: Number(process.env.ANALYSIS_BENCH_N ?? 300), seed: 1 });
+      if (s.openrouterKey) bench = await runMoodBench({ n: Number(process.env.ANALYSIS_BENCH_N ?? 300), seed: 1 });
     }
 
     const report = {

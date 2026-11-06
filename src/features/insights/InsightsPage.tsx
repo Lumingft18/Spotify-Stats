@@ -395,7 +395,7 @@ function Reliability() {
             </li>
             <li>
               Mood:{' '}
-              {d.mood.map((m) => `${{ reccobeats: 'misurato', llm: 'stimato LLM', llm_pending: 'stimato LLM (da rifare)', sage: 'stimato Sage', nessuno: 'assente' }[m.source] ?? m.source} ${fmtPct(m.minutesShare)}`).join(' · ')}{' '}
+              {d.mood.map((m) => `${{ reccobeats: 'misurato', llm: 'stimato LLM', llm_pending: 'stimato LLM (da rifare)', nessuno: 'assente' }[m.source] ?? m.source} ${fmtPct(m.minutesShare)}`).join(' · ')}{' '}
               del tempo di ascolto
             </li>
           </ul>

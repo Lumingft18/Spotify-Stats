@@ -1,14 +1,13 @@
-// Mood estimation for tracks without measured audio features.
-// Two interchangeable estimators: an LLM via OpenRouter (few-shot anchors, JSON schema) and Levanto Sage
-// (scale decisions). Neither is trusted by default: llm/moodBench.ts measures both against held-out
-// measured tracks, and estimates are written only when the benchmark says they beat a constant guess.
+// Mood estimation for tracks without measured audio features: an LLM via OpenRouter (few-shot anchors,
+// JSON schema). Not trusted by default: llm/moodBench.ts measures it against held-out measured tracks, and
+// estimates are written only when the benchmark says they beat a constant guess.
+// (Levanto Sage was benchmarked on the same tracks in Nov 2026 and did not beat the LLM: removed.)
 import { query, upsertMeta } from '../data/db';
 import type { MetaRow } from '../data/schema';
 import { idb } from '../lib/idb';
-import { getApp, type MoodProvider } from '../lib/store';
+import { getApp } from '../lib/store';
 import { structured } from './client';
 import { MOOD_CENTER } from '../lib/mood';
-import { sageMoodBatch } from './sage';
 import type { MoodBench } from './moodBench';
 
 export interface Item {
@@ -31,7 +30,7 @@ export interface Estimate {
 export interface MoodRunReport {
   analyzed: number;
   anchors: number;
-  provider: MoodProvider;
+  model: string;
   at: number;
 }
 
@@ -104,18 +103,16 @@ export async function measuredTracks(limit = 5000): Promise<Item[]> {
 
 /** Runs one estimator over `items` in batches. Returns uri → estimate. */
 export async function estimateMood(
-  provider: MoodProvider,
   items: Item[],
   anchors: Item[],
   opts: { samples?: number; signal?: AbortSignal; onProgress?: (done: number, total: number) => void; onBatch?: (b: Map<string, Estimate>) => Promise<void> },
 ): Promise<Map<string, Estimate>> {
   const out = new Map<string, Estimate>();
-  const B = provider === 'sage' ? 20 : 12;
+  const B = 12;
   const batches: Item[][] = [];
   for (let i = 0; i < items.length; i += B) batches.push(items.slice(i, i + B));
   const anchorText = anchors.length ? anchorLines(anchors) : '(nessun riferimento misurato disponibile)';
-  const sageRef = anchorLines(anchors.slice(0, 12));
-  const samples = provider === 'sage' ? 1 : Math.max(1, opts.samples ?? 1);
+  const samples = Math.max(1, opts.samples ?? 1);
   const model = getApp().settings.llmModelBulk;
   let cursor = 0;
   let done = 0;
@@ -123,11 +120,6 @@ export async function estimateMood(
 
   const runBatch = async (batch: Item[]): Promise<Map<string, Estimate>> => {
     const res = new Map<string, Estimate>();
-    if (provider === 'sage') {
-      const r = await sageMoodBatch(batch.map((t) => describe(t)), sageRef, opts.signal);
-      batch.forEach((t, i) => res.set(t.uri, { valence: r[i].valence, energy: r[i].energy, agreement: r[i].confidence }));
-      return res;
-    }
     const ids = new Map(batch.map((t, i) => [`t${i}`, t]));
     const user = `BRANI DI RIFERIMENTO (valori misurati):\n${anchorText}\n\nBRANI DA STIMARE:\n${batch.map((t, i) => `[t${i}] ${describe(t)}`).join('\n')}`;
     const acc = new Map<string, { v: number[]; e: number[] }>();
@@ -167,7 +159,7 @@ export async function estimateMood(
           res = await runBatch(batch);
         } catch (e) {
           if (opts.signal?.aborted) return;
-          console.warn(`mood batch failed (${provider})`, e);
+          console.warn('mood batch failed', e);
           await new Promise((r) => setTimeout(r, 1500 * 2 ** attempt));
         }
       }
@@ -203,14 +195,14 @@ export async function runMoodV2(opts: {
   onProgress: (done: number, total: number) => void;
   signal: AbortSignal;
 }): Promise<MoodRunReport> {
-  const provider = getApp().settings.moodProvider;
-  const pr = opts.bench.providers.find((p) => p.provider === provider);
+  const model = getApp().settings.llmModelBulk;
+  const pr = opts.bench.providers.find((p) => p.model === model);
   if (!pr?.useful.valence) throw new Error('Il benchmark non ha validato questo stimatore: nessuna stima scritta.');
   const anchors = pickAnchors(await measuredTracks(400), 40);
   const targets = await moodCandidates(opts.limit);
   const skill = Math.max(0, Math.min(1, pr.valence.skill));
   let analyzed = 0;
-  await estimateMood(provider, targets, anchors, {
+  await estimateMood(targets, anchors, {
     samples: opts.samples,
     signal: opts.signal,
     onProgress: opts.onProgress,
@@ -222,7 +214,7 @@ export async function runMoodV2(opts: {
           uri,
           valence: e.valence,
           energy: pr.useful.energy ? e.energy : null,
-          mood_source: provider === 'sage' ? 'sage' : 'llm',
+          mood_source: 'llm',
           mood_conf: skill * (0.5 + 0.5 * e.agreement),
         });
       }
@@ -230,14 +222,14 @@ export async function runMoodV2(opts: {
       if (rows.length) await upsertMeta(rows);
     },
   });
-  const report: MoodRunReport = { analyzed, anchors: anchors.length, provider, at: Date.now() };
+  const report: MoodRunReport = { analyzed, anchors: anchors.length, model, at: Date.now() };
   await idb.set('mood_report', report);
   getApp().bump();
   return report;
 }
 
 /** Withdraws AI estimates that failed the benchmark: values cleared, tracks can be re-estimated by a better provider. */
-export async function rejectAiEstimates(source: 'llm' | 'sage'): Promise<number> {
+export async function rejectAiEstimates(source = 'llm'): Promise<number> {
   const [{ n }] = await query<{ n: number }>(`SELECT count(*)::INT AS n FROM meta WHERE mood_source = '${source}'`);
   if (!n) return 0;
   const rows = await query<{ uri: string }>(`SELECT uri FROM meta WHERE mood_source = '${source}'`);

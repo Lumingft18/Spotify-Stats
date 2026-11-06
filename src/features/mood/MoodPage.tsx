@@ -1,7 +1,7 @@
 import { Fragment, useCallback, useMemo, useState } from 'react';
 import { Orbit, Search, Sparkles, Wand2, RefreshCw, X } from 'lucide-react';
 import { useSql, useSqlOne, useAsync } from '../../data/useSql';
-import { getApp, useApp, type MoodProvider } from '../../lib/store';
+import { getApp, useApp } from '../../lib/store';
 import { fmtHours, fmtInt, fmtPct, fmtMonth } from '../../lib/format';
 import { getMood, MOODS, MOOD_CENTER, MOOD_HEX, MOOD_SQL, moodLabel } from '../../lib/mood';
 import { navigate, routes } from '../../lib/router';
@@ -11,7 +11,6 @@ import { EMBED_JOB, startEmbeddings, stopEmbeddings } from '../../enrichment/emb
 import { runStep } from '../../enrichment/jobs';
 import { moodCandidates, type MoodRunReport } from '../../llm/mood';
 import { loadMoodBench, runMoodBench, type DimMetric } from '../../llm/moodBench';
-import { useSageAvailable } from '../../llm/sage';
 import { nameClustersWithLLM } from '../../llm/narrate';
 import { useLlmAvailable, estimateTokens } from '../../llm/client';
 import { Badge, Button, Card, ErrorNote, Meter, PageHeader, Section, Segmented, Skeleton, Spinner } from '../../components/ui';
@@ -59,15 +58,13 @@ function MoodBenchCard() {
   const epoch = useApp((s) => s.epoch);
   const settings = useApp((s) => s.settings);
   const bench = useAsync(loadMoodBench, [epoch]);
-  const sage = useSageAvailable();
   const llmOn = useLlmAvailable();
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const run = async () => {
     setErr(null);
-    const providers: MoodProvider[] = [...(llmOn ? (['openrouter'] as const) : []), ...(sage ? (['sage'] as const) : [])];
     try {
-      await runMoodBench({ providers, onProgress: (l, d, t) => setBusy(`${l === 'sage' ? 'Sage' : 'OpenRouter'} ${d}/${t}`) });
+      await runMoodBench({ onProgress: (_l, d, t) => setBusy(`${d}/${t}`) });
       useApp.getState().bump();
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
@@ -80,7 +77,7 @@ function MoodBenchCard() {
     <div className="mt-3 rounded-xl border border-border p-3 text-xs">
       <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
         <div className="font-medium text-text">Benchmark dello stimatore</div>
-        <Button size="sm" variant="ghost" disabled={!!busy || (!llmOn && !sage)} onClick={() => void run()}>
+        <Button size="sm" variant="ghost" disabled={!!busy || !llmOn} onClick={() => void run()}>
           {busy ? <Spinner size={12} /> : <RefreshCw size={12} />} {busy ?? 'Esegui benchmark'}
         </Button>
       </div>
@@ -108,17 +105,17 @@ function MoodBenchCard() {
             </thead>
             <tbody>
               {b.providers.map((p) => (
-                <Fragment key={p.provider}>
-                  <BenchRow label={`${p.provider === 'sage' ? 'Sage' : p.model} · valence`} d={p.valence} base={b.baseline.maeValence} useful={p.useful.valence} />
-                  <BenchRow label={`${p.provider === 'sage' ? 'Sage' : p.model} · energia`} d={p.energy} base={b.baseline.maeEnergy} useful={p.useful.energy} />
+                <Fragment key={p.model}>
+                  <BenchRow label={`${p.model} · valence`} d={p.valence} base={b.baseline.maeValence} useful={p.useful.valence} />
+                  <BenchRow label={`${p.model} · energia`} d={p.energy} base={b.baseline.maeEnergy} useful={p.useful.energy} />
                 </Fragment>
               ))}
             </tbody>
           </table>
           {b.providers.map((p) => (
-            <div key={p.provider} className="mt-1 text-text-faint">
-              {p.provider === 'sage' ? 'Sage' : 'OpenRouter'}: la confidenza dichiarata {Math.abs(p.confidenceValidity) < 0.1 || !Number.isFinite(p.confidenceValidity) ? 'non predice' : p.confidenceValidity > 0 ? 'predice in parte' : 'è inversa rispetto a'} l’errore reale (r = {Number.isFinite(p.confidenceValidity) ? p.confidenceValidity.toFixed(2) : '—'}).
-              {p.provider === settings.moodProvider && ' ← stimatore in uso'}
+            <div key={p.model} className="mt-1 text-text-faint">
+              {p.model}: la coerenza tra due stime {Math.abs(p.confidenceValidity) < 0.1 || !Number.isFinite(p.confidenceValidity) ? 'non predice' : p.confidenceValidity > 0 ? 'predice in parte' : 'è inversa rispetto a'} l’errore reale (r = {Number.isFinite(p.confidenceValidity) ? p.confidenceValidity.toFixed(2) : '—'}).
+              {p.model === settings.llmModelBulk && ' ← modello in uso'}
             </div>
           ))}
         </div>
@@ -129,11 +126,11 @@ function MoodBenchCard() {
 }
 
 function MoodStatus() {
-  const ai = useApp((s) => (s.settings.moodProvider === 'sage' ? s.settings.connections.sage && !!s.settings.sageKey : s.settings.connections.llm && !!s.settings.openrouterKey));
+  const ai = useLlmAvailable();
   const cov = useSqlOne<{ with_mood: number; total: number; reccobeats: number; llm: number; live: number; lyrics: number }>(`
     SELECT sum(minutes) FILTER (WHERE p.valence IS NOT NULL) AS with_mood, sum(minutes) AS total,
            count(DISTINCT p.uri) FILTER (WHERE m.mood_source = 'reccobeats') AS reccobeats,
-           count(DISTINCT p.uri) FILTER (WHERE m.mood_source IN ('llm', 'sage', 'llm_pending')) AS llm,
+           count(DISTINCT p.uri) FILTER (WHERE m.mood_source IN ('llm', 'llm_pending')) AS llm,
            count(DISTINCT p.uri) FILTER (WHERE m.mood_adj LIKE 'live:studio%') AS live,
            count(DISTINCT p.uri) FILTER (WHERE m.valence_lyrics IS NOT NULL) AS lyrics
     FROM p LEFT JOIN meta m USING (uri)`);
@@ -141,7 +138,6 @@ function MoodStatus() {
   const job = useApp((s) => s.jobs.audiofeatures);
   const aiJob = useApp((s) => s.jobs[MOOD_AI_JOB]);
   const autoMood = useApp((s) => s.settings.autoMoodAi);
-  const provider = useApp((s) => s.settings.moodProvider);
   const running = aiJob?.status === 'running';
   const [err, setErr] = useState<string | null>(null);
   const [limit, setLimit] = useState(400);
@@ -190,7 +186,7 @@ function MoodStatus() {
         </div>
         <p className="text-text-muted">
           Usa testo e generi del brano, calibrata su {fmtInt(c?.reccobeats ?? 0)} brani con valori misurati (esempi nel prompt). Prima di scrivere
-          qualcosa lo stimatore ({provider === 'sage' ? 'Levanto Sage' : 'LLM via OpenRouter'}) viene verificato sul benchmark qui sotto: se non
+          qualcosa il modello viene verificato sul benchmark qui sotto: se non
           batte la media, le stime non vengono salvate. {fmtInt(nCand)} brani hanno testo o tag disponibili.
           {report.value && ` Ultimo avvio: ${fmtInt(report.value.analyzed)} brani stimati.`}
         </p>

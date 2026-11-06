@@ -10,7 +10,7 @@
 //  - Verdict "useful" for a dimension only if the MAE CI is entirely below the baseline MAE AND the
 //    r CI is entirely above 0. Otherwise estimates for that dimension are not written.
 import { idb } from '../lib/idb';
-import { getApp, type MoodProvider } from '../lib/store';
+import { getApp } from '../lib/store';
 import { bootstrapCI, mae, mean, pearson, rng, shuffleInPlace } from '../ml/stats';
 import { estimateMood, measuredTracks, pickAnchors, type Item } from './mood';
 
@@ -25,13 +25,12 @@ export interface DimMetric {
 }
 
 export interface ProviderBench {
-  provider: MoodProvider;
-  /** Model behind the provider (OpenRouter model id, or 'levanto-sage'): a new model needs a new benchmark. */
+  /** OpenRouter model id: a new model needs a new benchmark. */
   model: string;
   valence: DimMetric;
   energy: DimMetric;
   useful: { valence: boolean; energy: boolean };
-  /** Correlation between the provider's own confidence and −|error|: is its confidence informative? */
+  /** Correlation between the model's own confidence (self-consistency) and −|error|: is its confidence informative? */
   confidenceValidity: number;
 }
 
@@ -49,12 +48,11 @@ const BENCH_KEY = 'mood_bench';
 
 export const loadMoodBench = () => idb.get<MoodBench>(BENCH_KEY);
 
-export const providerModel = (p: MoodProvider) => (p === 'sage' ? 'levanto-sage' : getApp().settings.llmModelBulk);
 
-/** The stored result for the current provider + model, if any. */
-export async function currentBench(provider: MoodProvider): Promise<{ bench: MoodBench; result: ProviderBench } | null> {
+/** The stored result for the configured model, if any. */
+export async function currentBench(): Promise<{ bench: MoodBench; result: ProviderBench } | null> {
   const bench = await loadMoodBench();
-  const result = bench?.providers.find((p) => p.provider === provider && p.model === providerModel(provider));
+  const result = bench?.providers.find((p) => p.model === getApp().settings.llmModelBulk);
   return bench && result ? { bench, result } : null;
 }
 
@@ -87,7 +85,6 @@ export function dimMetric(pred: number[], truth: number[], baselineValue: number
 export const isUseful = (d: DimMetric, baselineMae: number) => d.n >= 30 && d.maeCI[1] < baselineMae && d.rCI[0] > 0;
 
 export async function runMoodBench(opts: {
-  providers: MoodProvider[];
   n?: number;
   seed?: number;
   signal?: AbortSignal;
@@ -107,18 +104,13 @@ export async function runMoodBench(opts: {
   const baseline = { valence: bv, energy: be, maeValence: mae(truthV.map(() => bv), truthV), maeEnergy: mae(truthE.map(() => be), truthE) };
 
   const providers: ProviderBench[] = [];
-  for (const provider of opts.providers) {
-    if (opts.signal?.aborted) break;
-    const est = await estimateMood(provider, sample as Item[], anchors, {
-      samples: 1,
-      signal: opts.signal,
-      onProgress: (d, t) => opts.onProgress?.(provider, d, t),
-    });
-    const got = sample.filter((t) => {
-      const e = est.get(t.uri);
-      return e && e.valence != null && e.energy != null;
-    });
-    if (got.length < 30) continue;
+  const model = getApp().settings.llmModelBulk;
+  const est = await estimateMood(sample as Item[], anchors, { samples: 1, signal: opts.signal, onProgress: (d, t) => opts.onProgress?.(model, d, t) });
+  const got = sample.filter((t) => {
+    const e = est.get(t.uri);
+    return e && e.valence != null && e.energy != null;
+  });
+  if (got.length >= 30) {
     const pv = got.map((t) => est.get(t.uri)!.valence!);
     const pe = got.map((t) => est.get(t.uri)!.energy!);
     const tv = got.map((t) => t.valence!);
@@ -128,8 +120,7 @@ export async function runMoodBench(opts: {
     const conf = got.map((t) => est.get(t.uri)!.agreement);
     const negErr = got.map((_, i) => -(Math.abs(pv[i] - tv[i]) + Math.abs(pe[i] - te[i])));
     providers.push({
-      provider,
-      model: providerModel(provider),
+      model,
       valence,
       energy,
       useful: { valence: isUseful(valence, baseline.maeValence), energy: isUseful(energy, baseline.maeEnergy) },
@@ -137,8 +128,8 @@ export async function runMoodBench(opts: {
     });
   }
   const prev = await loadMoodBench();
-  // Results for providers not re-run now are kept only if they used the same split and test size.
-  const kept = prev && prev.seed === seed && prev.nTest === sample.length ? prev.providers.filter((p) => !providers.some((q) => q.provider === p.provider)) : [];
+  // Results for other models are kept only if they used the same split and test size.
+  const kept = prev && prev.seed === seed && prev.nTest === sample.length ? prev.providers.filter((p) => p.model !== model) : [];
   const bench: MoodBench = {
     at: Date.now(),
     seed,

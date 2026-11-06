@@ -2,7 +2,6 @@
 declare const __LOCAL_KEYS__: {
   openrouterKey?: string;
   lastfmKey?: string;
-  sageKey?: string;
   llmModelBulk?: string;
   llmModelAgent?: string;
   lrclibAppId?: string;
