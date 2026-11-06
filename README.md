@@ -8,7 +8,7 @@ Analisi del tuo storico Spotify **in locale**: statistiche, ere musicali, mood, 
 - **Esplora** — artisti, brani e album con filtri; pagine dedicate per ogni entità (andamento, orari, mood, simili).
 - **Tempo** — heatmap ora × giorno, calendario annuale, sessioni (tipologie), salti, dispositivi, paesi.
 - **Mood & Galassia** — valence/energia misurate (ReccoBeats) o stimate da LLM (OpenRouter) su testo e tag, **solo se lo stimatore supera il benchmark**; mappa UMAP degli embedding (Gemini Embedding 2 via OpenRouter), creata in automatico quando c'è la chiave (disattivabile), cluster, ricerca semantica, selezione a lazo.
-- **Modelli** — predizione degli skip (regressione logistica, validazione temporale, baseline, IC bootstrap), ere (segmentazione binaria a penalità relativa), ciclo di vita degli artisti (Kaplan–Meier con troncamento a sinistra), riscoperta (Thompson sampling), sezione **Affidabilità** (pulizia dati, sensibilità alle soglie).
+- **Modelli** — predizione degli skip (regressione logistica, validazione temporale, baseline, IC bootstrap), ere (segmentazione binaria a penalità relativa), ciclo di vita degli artisti (Kaplan–Meier con troncamento a sinistra), riscoperta (Thompson sampling). Le ere prendono il nome dagli artisti del periodo, non dai generi.
 - **Chiedi** — agente con tool (`run_sql` di sola lettura, ricerca semantica, grafici, liste brani); ogni query è ispezionabile.
 - **Racconto** — story mode annuale scorrevole, didascalie opzionali via AI, immagine 9:16 da condividere.
 - **Confronta** — compatibilità con amici (salva solo aggregati).

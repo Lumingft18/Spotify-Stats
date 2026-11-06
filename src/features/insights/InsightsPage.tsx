@@ -1,15 +1,13 @@
 import { useCallback, useState } from 'react';
 import { ThumbsDown, ThumbsUp, Wand2, RefreshCw, Info } from 'lucide-react';
 import { useAsync } from '../../data/useSql';
-import { artistSurvival, detectEras, rediscoveryCandidates, rediscoveryFeedback, sensitivity, trainSkipModel, type Candidate, type Era } from '../../ml/models';
-import { dataQuality } from '../../data/quality';
-import { MOODS } from '../../lib/mood';
+import { artistSurvival, detectEras, rediscoveryCandidates, rediscoveryFeedback, trainSkipModel, type Candidate, type Era } from '../../ml/models';
 import { nameErasWithLLM } from '../../llm/narrate';
 import { useLlmAvailable } from '../../llm/client';
 import { fmtDate, fmtHours, fmtInt, fmtMonth, fmtPct } from '../../lib/format';
 import { routes } from '../../lib/router';
 import { spotifyId } from '../../enrichment/providers';
-import { Badge, Button, Card, Empty, ErrorNote, PageHeader, Section, Skeleton, Spinner, cx } from '../../components/ui';
+import { Badge, Button, Card, Empty, ErrorNote, PageHeader, Section, Skeleton, Spinner } from '../../components/ui';
 import { Cover } from '../../components/Cover';
 import { PlotChart, Plot } from '../../components/charts/PlotChart';
 import { StoryButton } from '../../components/StoryButton';
@@ -259,7 +257,7 @@ function Lifecycle() {
           Stimatore di Kaplan–Meier su {fmtInt(v.n)} artisti con almeno 3 giorni di ascolto: un artista “esce” quando passano più di{' '}
           {v.churnGapDays} giorni senza ascoltarlo. Gli artisti ancora attivi sono osservazioni censurate, quindi la curva non penalizza le
           scoperte recenti. {fmtInt(v.leftTruncated)} artisti sono esclusi perché li ascoltavi già all’inizio dei dati: la loro vera data di
-          scoperta è sconosciuta. Quanto cambia il risultato con altre soglie è in “Affidabilità” più sotto.
+          scoperta è sconosciuta.
         </Explain>
       </Card>
       <div className="flex flex-col gap-6">
@@ -352,134 +350,6 @@ function Rediscovery() {
   );
 }
 
-function Reliability() {
-  const epoch = useApp((s) => s.epoch);
-  const q = useAsync(dataQuality, [epoch]);
-  const sens = useAsync(sensitivity, [epoch]);
-  const yearChart = useCallback(
-    () => ({
-      height: 180,
-      marginLeft: 40,
-      x: { label: null, tickFormat: (y: number) => String(y) },
-      y: { label: 'quota', grid: true, domain: [0, 1], tickFormat: (v: number) => `${Math.round(v * 100)}%` },
-      color: { legend: true },
-      marks: [
-        Plot.lineY(
-          (q.value?.byYear ?? []).flatMap((r) => [
-            { year: r.year, v: r.skipRate, k: 'salti' },
-            { year: r.year, v: r.fwdShare, k: 'chiusi con avanti' },
-            { year: r.year, v: r.mobileShare, k: 'da telefono' },
-            { year: r.year, v: r.shuffleShare, k: 'in shuffle' },
-          ]),
-          { x: 'year', y: 'v', stroke: 'k', strokeWidth: 2, marker: 'dot' },
-        ),
-      ],
-    }),
-    [q.value],
-  );
-  if (q.loading || sens.loading) return <Skeleton className="h-60" />;
-  const d = q.value;
-  const s = sens.value;
-  return (
-    <div className="grid gap-6 lg:grid-cols-2">
-      {d && (
-        <Card className="p-4 text-sm">
-          <div className="mb-2 text-lg font-medium">Pulizia dei dati</div>
-          <ul className="flex flex-col gap-1 text-text-muted">
-            <li>
-              <span className="num text-text">{fmtInt(d.rawRows)}</span> righe nell’export ·{' '}
-              <span className="num text-text">{fmtInt(d.duplicatesRemoved)}</span> duplicati rimossi (stesso brano e stesso istante: tenuto il più lungo) ·{' '}
-              <span className="num text-text">{fmtInt(d.excludedRows)}</span> esclusi da te
-            </li>
-            <li>
-              <span className="num text-text">{fmtInt(d.short)}</span> riproduzioni sotto i 30 s: restano per salti e sessioni, non contano come ascolti
-            </li>
-            <li>
-              Mood:{' '}
-              {d.mood.map((m) => `${{ reccobeats: 'misurato', llm: 'stimato LLM', llm_pending: 'stimato LLM (da rifare)', nessuno: 'assente' }[m.source] ?? m.source} ${fmtPct(m.minutesShare)}`).join(' · ')}{' '}
-              del tempo di ascolto
-            </li>
-          </ul>
-          <div className="mt-4 text-xs text-text-muted">Segnali grezzi anno per anno</div>
-          <PlotChart make={yearChart} height={180} ariaLabel="Tasso di salto e abitudini per anno" />
-          <Explain>
-            Il campo “salto” esplicito compare negli export solo dal 2022: prima, l’unico segnale è “chiuso con avanti”. Per questo le due linee
-            coincidono fino al 2021 e poi si separano. Il modello degli skip usa “chiuso con avanti”, registrato allo stesso modo in tutti gli anni,
-            così l’etichetta non cambia significato a metà serie. Anche telefono e shuffle cambiano nel tempo: confrontare anni diversi richiede
-            cautela.
-          </Explain>
-        </Card>
-      )}
-      {s && (
-        <Card className="p-4 text-sm">
-          <div className="mb-2 text-lg font-medium">Sensibilità alle soglie</div>
-          <div className="text-xs text-text-muted">Ciclo di vita: soglia di abbandono → mediana</div>
-          <table className="num mt-1 w-full text-left text-xs">
-            <tbody>
-              {s.survival.map((r) => (
-                <tr key={r.churnGapDays} className="border-t border-border">
-                  <td className="py-1 pr-3">{r.churnGapDays} giorni</td>
-                  <td className="py-1 pr-3">{r.medianDays != null ? `${fmtInt(r.medianDays)} giorni` : 'oltre i dati'}</td>
-                  <td className="py-1 text-text-faint">{fmtInt(r.n)} artisti</td>
-                </tr>
-              ))}
-              <tr className="border-t border-border text-text-faint">
-                <td className="py-1 pr-3">90 g, senza escludere i già noti</td>
-                <td className="py-1 pr-3">{s.survivalNoTruncation.medianDays != null ? `${fmtInt(s.survivalNoTruncation.medianDays)} giorni` : 'oltre i dati'}</td>
-                <td className="py-1">{fmtInt(s.survivalNoTruncation.n)} artisti</td>
-              </tr>
-            </tbody>
-          </table>
-          <div className="mt-4 text-xs text-text-muted">Ere: penalità → numero di ere</div>
-          <div className="num mt-1 flex flex-wrap gap-2 text-xs">
-            {s.eras.map((e) => (
-              <span key={e.penalty} className="rounded-full border border-border px-2 py-0.5">
-                {e.penalty} → {e.eras}
-              </span>
-            ))}
-          </div>
-          <div className="mt-1 text-xs text-text-faint">
-            {fmtPct(s.eraStability)} dei confini trovati con la penalità predefinita (0,04) ricompare (±1 mese) anche con quella più fine e quella più grossolana.
-          </div>
-          <div className="mt-4 text-xs text-text-muted">Mood: quote spostando il centro di ±0,05</div>
-          <table className="num mt-1 w-full text-left text-xs">
-            <thead className="text-text-faint">
-              <tr>
-                <th className="font-normal">Δ valence, Δ energia</th>
-                {MOODS.map((m) => (
-                  <th key={m.id} className="font-normal">
-                    {m.label}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {s.moodShift.map((r) => (
-                <tr key={`${r.dv}_${r.de}`} className={cx('border-t border-border', r.dv === 0 && r.de === 0 && 'text-text')}>
-                  <td className="py-1 pr-2 text-text-faint">
-                    {r.dv >= 0 ? '+' : ''}
-                    {r.dv}, {r.de >= 0 ? '+' : ''}
-                    {r.de}
-                  </td>
-                  {MOODS.map((m) => (
-                    <td key={m.id} className="py-1 pr-2">
-                      {fmtPct(r.shares[m.id] ?? 0)}
-                    </td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          <Explain>
-            Ogni soglia scelta a mano viene rifatta con valori vicini. Se una conclusione regge con tutte, è solida; se cambia molto, va letta con
-            cautela.
-          </Explain>
-        </Card>
-      )}
-    </div>
-  );
-}
-
 /** While enrichment runs, every few seconds new data bumps the epoch and all models would retrain:
  *  the page waits for the activities to finish, then computes once. */
 function WaitForJobs() {
@@ -548,9 +418,6 @@ export default function InsightsPage() {
       </Section>
       <Section kicker="Ciclo di vita degli artisti" title="Quanto durano le tue passioni">
         <Lifecycle />
-      </Section>
-      <Section kicker="Affidabilità" title="Quanto fidarsi di questi numeri">
-        <Reliability />
       </Section>
       <p className="text-xs text-text-faint">
         {fmtPct(1)} locale: modelli calcolati con DuckDB e TypeScript nel browser. Le ere e i suggerimenti seguono il periodo selezionato in alto.

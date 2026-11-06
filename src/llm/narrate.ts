@@ -52,7 +52,7 @@ export async function nameErasWithLLM(eras: Era[]): Promise<Record<string, strin
   const res = await structured<{ eras: Array<{ key: string; name: string }> }>({
     model: getApp().settings.llmModelBulk,
     system:
-      'Sei un critico musicale. Dai a ogni periodo della vita musicale di una persona un titolo breve (2-5 parole, italiano, stile capitolo di romanzo, niente emoji). Usa artisti/generi forniti.',
+      'Sei un critico musicale. Dai a ogni periodo della vita musicale di una persona un titolo breve (2-6 parole, italiano, stile capitolo di romanzo, niente emoji). Il titolo parla degli ARTISTI di quel periodo: nomina almeno uno degli artisti forniti o richiama chiaramente il loro mondo. Non usare nomi di generi musicali (pop, rock, rap, indie…). Titoli diversi tra loro.',
     user: eras.map((e) => `${e.from}_${e.to}: artisti principali ${e.topArtists.join(', ')}; durata ${e.months} mesi`).join('\n'),
     schemaName: 'era_names',
     schema: {

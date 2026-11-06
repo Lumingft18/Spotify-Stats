@@ -221,7 +221,6 @@ export interface Era {
   to: string;
   months: number;
   topArtists: string[];
-  topCluster: number | null;
   minutes: number;
   name: string;
 }
@@ -288,12 +287,6 @@ export async function detectEras(maxEras = 7, penalty = 0.04): Promise<Era[]> {
       `SELECT artist FROM p WHERE strftime(day, '%Y-%m') BETWEEN ? AND ? GROUP BY artist ORDER BY sum(minutes) DESC LIMIT 3`,
       [from, to],
     );
-    const cl = await query<{ cluster: number | null; label: string | null }>(
-      `SELECT p.cluster, c.label FROM p LEFT JOIN clusters c ON c.id = p.cluster
-       WHERE strftime(p.day, '%Y-%m') BETWEEN ? AND ? AND p.cluster IS NOT NULL
-       GROUP BY ALL ORDER BY sum(p.minutes) DESC LIMIT 1`,
-      [from, to],
-    );
     let minutes = 0;
     for (let i = a; i < b; i++) minutes += monthMinutes[i];
     eras.push({
@@ -301,9 +294,9 @@ export async function detectEras(maxEras = 7, penalty = 0.04): Promise<Era[]> {
       to,
       months: b - a,
       topArtists: top.map((t) => t.artist),
-      topCluster: cl[0]?.cluster ?? null,
       minutes,
-      name: cl[0]?.label ? `L’era ${cl[0].label}` : `L’era ${top[0]?.artist ?? ''}`,
+      // Named after the people you listened to, not a genre label.
+      name: top.length >= 2 ? `L’era di ${top[0].artist} e ${top[1].artist}` : `L’era di ${top[0]?.artist ?? '…'}`,
     });
   }
   const custom = (await kv.get<Record<string, string>>('era_names')) ?? {};
