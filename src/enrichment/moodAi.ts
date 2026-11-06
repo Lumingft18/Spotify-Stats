@@ -9,6 +9,7 @@ import { exec, persistMeta } from '../data/db';
 import { kv } from '../lib/kv';
 import { getApp } from '../lib/store';
 import { isEnrichmentHeld } from './pause';
+import { markWork } from './completion';
 
 export const MOOD_AI_JOB = 'mood_llm';
 const LABEL = 'Mood AI';
@@ -33,6 +34,7 @@ export async function startMoodAi(opts: { limit: number; samples?: 1 | 2 | 3 }):
   const app = getApp();
   const c = new AbortController();
   ctrl = c;
+  markWork();
   let done = 0;
   let total = 0;
   let phase = '';

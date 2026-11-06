@@ -274,6 +274,12 @@ export async function loadScratchPlays(cols: PlayColumns, name: string): Promise
   await insertArrow(playsTable(cols), name);
 }
 
+/** Result of a query as Arrow IPC (e.g. merged plays to save). */
+export async function queryIpc(sql: string): Promise<Uint8Array> {
+  const t = await serial((c) => c.query(sql));
+  return tableToIPC(t, 'stream');
+}
+
 /** Raw plays as Arrow IPC (the format saved for every analysis). */
 export function playsIpc(cols: PlayColumns): Uint8Array {
   if (PLAY_COLUMNS.some((k) => !Array.isArray(cols[k]))) throw new Error('Colonne non valide');

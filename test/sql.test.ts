@@ -16,8 +16,8 @@ vi.mock('../src/data/db', () => ({
   upsertMeta: async () => undefined,
   setClusters: async () => undefined,
 }));
-vi.mock('../src/lib/idb', () => ({
-  idb: {
+vi.mock('../src/lib/kv', () => ({
+  kv: {
     get: async (k: string) => kv.get(k),
     set: async (k: string, v: unknown) => void kv.set(k, v),
     setMany: async (e: Array<[string, unknown]>) => e.forEach(([k, v]) => kv.set(k, v)),

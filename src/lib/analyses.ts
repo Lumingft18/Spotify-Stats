@@ -12,10 +12,12 @@ export interface Analysis {
   first_day: string | null;
   last_day: string | null;
   display_name: string | null;
+  /** When every enrichment step last finished (null = never, or new data since). */
+  enriched_at: number | null;
   bytes: number;
 }
 
-export type AnalysisPatch = Partial<Pick<Analysis, 'name' | 'history_kind' | 'rows' | 'first_day' | 'last_day' | 'display_name'>> & { opened?: boolean };
+export type AnalysisPatch = Partial<Pick<Analysis, 'name' | 'history_kind' | 'rows' | 'first_day' | 'last_day' | 'display_name' | 'enriched_at'>> & { opened?: boolean };
 
 const CURRENT_KEY = 'ss2.analysis';
 
@@ -49,10 +51,35 @@ export const analyses = {
 };
 
 /** Opens a saved analysis: full reload so DuckDB, jobs and caches start clean. */
-export function openAnalysis(id: string) {
+export function openAnalysis(id: string, hash = '#/') {
   setCurrentAnalysis(id);
-  location.hash = '#/';
+  location.hash = hash;
   location.reload();
+}
+
+// "Complete the other person, then come back": set by Confronta, honoured when that analysis finishes enriching.
+const RETURN_KEY = 'ss2.compareReturn';
+export interface CompareReturn {
+  back: string;
+  backName: string;
+  other: string;
+  hash: string;
+}
+export function setCompareReturn(r: CompareReturn | null) {
+  try {
+    if (r) localStorage.setItem(RETURN_KEY, JSON.stringify(r));
+    else localStorage.removeItem(RETURN_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+export function getCompareReturn(): CompareReturn | null {
+  try {
+    const raw = localStorage.getItem(RETURN_KEY);
+    return raw ? (JSON.parse(raw) as CompareReturn) : null;
+  } catch {
+    return null;
+  }
 }
 
 /** Back to the start screen (new analysis or history), keeping everything saved. */

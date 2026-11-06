@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react';
-import { FolderOpen, Pencil, Trash2, Check, X, History } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { FolderOpen, Pencil, Trash2, Check, X, History, RefreshCw } from 'lucide-react';
+import { updateAnalysisFromFiles } from '../../data/updateAnalysis';
 import { analyses, openAnalysis, type Analysis } from '../../lib/analyses';
 import { fmtDate } from '../../lib/format';
 import { Button, ErrorNote, Spinner } from '../../components/ui';
@@ -15,6 +16,10 @@ export function SavedAnalyses() {
   const [editing, setEditing] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
   const [confirm, setConfirm] = useState<string | null>(null);
+  const [updating, setUpdating] = useState<{ id: string; step: string } | null>(null);
+  const [updated, setUpdated] = useState<Record<string, string>>({});
+  const fileFor = useRef<string | null>(null);
+  const fileInput = useRef<HTMLInputElement>(null);
 
   const load = () =>
     analyses
@@ -44,8 +49,29 @@ export function SavedAnalyses() {
     }
   };
 
+  const runUpdate = async (files: FileList | null) => {
+    const id = fileFor.current;
+    if (!id || !files?.length) return;
+    setErr(null);
+    setUpdating({ id, step: 'Leggo il nuovo export…' });
+    try {
+      const r = await updateAnalysisFromFiles(id, Array.from(files), (step) => setUpdating({ id, step }));
+      setUpdated((u) => ({
+        ...u,
+        [id]: r.added > 0 ? `+${r.added.toLocaleString('it-IT')} ascolti nuovi` : r.profileUpdated ? 'dati dell’account aggiornati' : 'nessun ascolto nuovo',
+      }));
+      await load();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setUpdating(null);
+      if (fileInput.current) fileInput.current.value = '';
+    }
+  };
+
   return (
     <section aria-labelledby="saved-title" className="animate-rise pb-6">
+      <input ref={fileInput} type="file" accept=".zip,.json" multiple hidden onChange={(e) => void runUpdate(e.target.files)} />
       <h2 id="saved-title" className="mb-3 flex items-center gap-2 text-sm font-medium text-text-muted">
         <History size={15} /> Analisi salvate · {list.length}
       </h2>
@@ -104,6 +130,19 @@ export function SavedAnalyses() {
                     <Button
                       size="sm"
                       variant="ghost"
+                      disabled={!!updating}
+                      title="Aggiungi un export più recente: unisce i nuovi ascolti e tiene copertine, testi, mood e mappa già calcolati"
+                      aria-label={`Aggiorna ${a.name} con un nuovo export`}
+                      onClick={() => {
+                        fileFor.current = a.id;
+                        fileInput.current?.click();
+                      }}
+                    >
+                      <RefreshCw size={14} className={updating?.id === a.id ? 'animate-spin' : undefined} /> Carica ZIP aggiornato
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
                       aria-label={`Rinomina ${a.name}`}
                       onClick={() => {
                         setDraft(a.name);
@@ -118,6 +157,8 @@ export function SavedAnalyses() {
                   </div>
                 </div>
               )}
+              {updating?.id === a.id && <div className="mt-2 text-xs text-text-muted">{updating.step}</div>}
+              {updated[a.id] && !updating && <div className="mt-2 text-xs text-good">{updated[a.id]} · copertine, testi e mood già calcolati restano</div>}
               {confirm === a.id && (
                 <div className="mt-3 flex flex-wrap items-center gap-2 rounded-xl border border-bad/40 bg-bad/10 p-3 text-sm">
                   <span className="flex-1 text-text-muted">Eliminare “{a.name}”? Storico, mood, mappa e chat di questa analisi spariscono. La cache condivisa resta.</span>

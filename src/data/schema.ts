@@ -160,3 +160,19 @@ clusters -- id INTEGER, label VARCHAR (nome del cluster musicale)
 
 Note: "tempo di ascolto" = sum(minutes). "Ascolti" = count(*) FILTER (WHERE counted). Tasso di skip = avg(skipped::INT). Usa sempre p per domande sul periodo corrente.
 `;
+
+/**
+ * Adds a newer export to saved raw plays (both tables shaped like plays_raw), writing `out`.
+ * - Extended history (exact timestamps): union of both, duplicates removed with the same rule as BUILD_SQL
+ *   (one play per start time and track, the longest kept) — plays synced late inside old periods are recovered.
+ * - Last-year history (minute precision, so the same play has a slightly different start): only plays after the
+ *   last one already saved are added, otherwise the overlap would be counted twice.
+ */
+export function mergePlaysSql(oldT: string, newT: string, out: string, newIsLegacy: boolean): string {
+  for (const t of [oldT, newT, out]) if (!/^[a-z_]+$/.test(t)) throw new Error('nome tabella non valido');
+  const fresh = newIsLegacy ? `SELECT * FROM ${newT} WHERE ts_start > (SELECT max(ts_start) FROM ${oldT})` : `SELECT * FROM ${newT}`;
+  return `CREATE OR REPLACE TABLE ${out} AS
+    SELECT * FROM (SELECT * FROM ${oldT} UNION ALL BY NAME ${fresh})
+    QUALIFY row_number() OVER (PARTITION BY ts_start, coalesce(track_uri, 'local:' || artist || ' — ' || track) ORDER BY ms_played DESC) = 1
+    ORDER BY ts_start;`;
+}

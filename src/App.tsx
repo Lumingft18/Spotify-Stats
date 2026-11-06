@@ -24,6 +24,7 @@ const ComparePage = lazy(() => import('./features/compare/ComparePage'));
 const SettingsPage = lazy(() => import('./features/settings/SettingsPage'));
 const ProfilePage = lazy(() => import('./features/profile/ProfilePage'));
 const ReportPage = lazy(() => import('./features/report/ReportPage'));
+const CompareReport = lazy(() => import('./features/compare/CompareReport'));
 
 function Router() {
   const { path } = useRoute();
@@ -61,7 +62,7 @@ function Router() {
 }
 
 /** The PDF report renders without the app chrome (sidebar, top bar). */
-function ReportRoute() {
+function ReportRoute({ compare = false }: { compare?: boolean }) {
   return (
     <Suspense
       fallback={
@@ -70,7 +71,7 @@ function ReportRoute() {
         </div>
       }
     >
-      <ReportPage />
+      {compare ? <CompareReport /> : <ReportPage />}
     </Suspense>
   );
 }
@@ -102,7 +103,8 @@ async function boot() {
 
 export default function App() {
   const status = useApp((s) => s.status);
-  const isReport = useRoute().path[0] === 'report';
+  const route0 = useRoute().path[0];
+  const isReport = route0 === 'report' || route0 === 'report-compare';
 
   useEffect(() => {
     prewarm();
@@ -120,7 +122,7 @@ export default function App() {
     );
   }
   if (status !== 'ready') return <Onboarding />;
-  if (isReport) return <ReportRoute />;
+  if (isReport) return <ReportRoute compare={route0 === 'report-compare'} />;
   return (
     <Shell>
       <Suspense

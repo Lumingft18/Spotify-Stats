@@ -3,6 +3,7 @@ import { EyeOff, RotateCcw, ShieldCheck, Trash2, Upload, Globe, KeyRound, Clock,
 import { checkOpenRouterKey } from '../../llm/client';
 import { catalogStats, clearCatalog } from '../../lib/catalogCache';
 import { analyses, leaveAnalysis } from '../../lib/analyses';
+import { updateAnalysisFromFiles } from '../../data/updateAnalysis';
 import { LimitSelect } from '../../components/LimitSelect';
 import { useAsync } from '../../data/useSql';
 import { ENV_KEYS, useApp, type ConnectionId } from '../../lib/store';
@@ -387,6 +388,7 @@ export default function SettingsPage() {
             >
               <Upload size={14} /> Nuova analisi / apri un’altra
             </Button>
+            <UpdateCurrentButton />
             <Button
               variant="ghost"
               title="Mood, testi, tag e gruppi per brano, in JSON: serve a `npm run analysis` (ANALYSIS_META) per rigenerare i numeri fuori dal browser."
@@ -522,5 +524,41 @@ function ExcludedList() {
         </>
       )}
     </Card>
+  );
+}
+
+/** Adds a newer export to the open analysis: new plays only; enrichment, map and chats are kept. */
+function UpdateCurrentButton() {
+  const id = useApp((s) => s.analysis?.id);
+  const [step, setStep] = useState<string | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
+  return (
+    <>
+      <label className="inline-flex h-10 cursor-pointer items-center gap-2 rounded-full border border-border bg-surface-2 px-4 text-sm font-medium text-text hover:bg-surface-3">
+        {step ? <Spinner size={14} /> : <RotateCcw size={14} />} {step ?? 'Carica ZIP aggiornato'}
+        <input
+          type="file"
+          accept=".zip,.json"
+          multiple
+          hidden
+          disabled={!!step || !id}
+          onChange={async (e) => {
+            if (!id || !e.target.files?.length) return;
+            stopAll();
+            setMsg(null);
+            try {
+              const r = await updateAnalysisFromFiles(id, Array.from(e.target.files), setStep);
+              setMsg(r.added > 0 ? `+${r.added.toLocaleString('it-IT')} ascolti nuovi: ricarico…` : 'Nessun ascolto nuovo in questo export.');
+              if (r.added > 0 || r.profileUpdated) setTimeout(() => location.reload(), 900);
+            } catch (x) {
+              setMsg(x instanceof Error ? x.message : String(x));
+            } finally {
+              setStep(null);
+            }
+          }}
+        />
+      </label>
+      {msg && <span className="self-center text-sm text-text-muted">{msg}</span>}
+    </>
   );
 }

@@ -4,6 +4,7 @@ import { query } from '../data/db';
 import { buildIndex, computeLayout, DEFAULT_EMBED_MODEL, loadIndex } from '../ml/embeddings';
 import { getApp } from '../lib/store';
 import { isEnrichmentHeld } from './pause';
+import { markWork } from './completion';
 
 export const EMBED_JOB = 'embeddings';
 const LABEL = 'Mappa del gusto (embedding)';
@@ -29,6 +30,7 @@ export function startEmbeddings(limit: number): Promise<void> {
   const app = getApp();
   const c = new AbortController();
   ctrl = c;
+  markWork();
   const job = (status: 'running' | 'done' | 'paused' | 'error', done = 0, total = 0, detail?: string) =>
     app.setJob({ id: EMBED_JOB, label: LABEL, done, total, status, detail });
   running = (async () => {

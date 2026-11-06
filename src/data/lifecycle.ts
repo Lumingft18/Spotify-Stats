@@ -135,6 +135,9 @@ async function importInto(
     onStep(`Indicizzo ${res.stats.rows.toLocaleString('it-IT')} ascolti…`);
     await loadPlays(res.cols);
     await kv.set('dataset', { historyKind: res.historyKind, rows: res.stats.rows });
+    // New listening data: the analysis has to be enriched again before it counts as complete.
+    const id = currentAnalysisId();
+    if (id) await analyses.update(id, { enriched_at: null }).catch(() => undefined);
   } else {
     keptExisting = downgrade;
     if (!prevDataset && !hasHistory) throw new Error('Questo pacchetto non contiene cronologia di ascolto: carica anche la "Cronologia di streaming estesa".');

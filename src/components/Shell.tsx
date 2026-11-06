@@ -16,7 +16,7 @@ import {
   FileDown,
   FolderOpen,
 } from 'lucide-react';
-import { leaveAnalysis } from '../lib/analyses';
+import { getCompareReturn, leaveAnalysis, openAnalysis, setCompareReturn } from '../lib/analyses';
 import { stopAll } from '../enrichment/jobs';
 import { useRoute, routes } from '../lib/router';
 import { useApp } from '../lib/store';
@@ -184,6 +184,7 @@ export function Shell({ children }: { children: ReactNode }) {
         </header>
       )}
 
+      <CompareReturnBar />
       <main id="main" className="lg:pl-60">
         {isStory ? children : <div className="mx-auto w-full max-w-[2880px] px-4 pb-28 pt-8 md:px-8 lg:pb-16 lg:pt-10 2xl:px-14">{children}</div>}
       </main>
@@ -208,6 +209,30 @@ export function Shell({ children }: { children: ReactNode }) {
 
       <CommandPalette />
       <ActivityDrawer />
+    </div>
+  );
+}
+
+/** Shown while an analysis is being completed on behalf of a comparison: it returns there by itself. */
+function CompareReturnBar() {
+  const id = useApp((s) => s.analysis?.id);
+  const name = useApp((s) => s.analysis?.name);
+  const r = getCompareReturn();
+  if (!r || !id || r.other !== id) return null;
+  return (
+    <div className="border-b border-border bg-surface-2/80 px-4 py-2 text-sm lg:pl-64">
+      <span className="text-text-muted">
+        Sto completando <b className="text-text">{name}</b> per il confronto con {r.backName}: quando le attività finiscono torno al confronto da solo.
+      </span>{' '}
+      <button
+        className="ml-2 text-[var(--accent)] hover:underline"
+        onClick={() => {
+          setCompareReturn(null);
+          openAnalysis(r.back, r.hash);
+        }}
+      >
+        Torna ora
+      </button>
     </div>
   );
 }

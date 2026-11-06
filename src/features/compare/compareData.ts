@@ -126,7 +126,31 @@ export interface Side {
   energy: number | null;
 }
 
+/** Bump when the Comparison shape changes: older saved comparisons are recomputed. */
+export const COMPARE_VERSION = 2;
+
+export interface TopItem {
+  label: string;
+  sub?: string;
+  hours: number;
+  cover: string | null;
+}
+
+export interface Records {
+  streak: { days: number; from: string; to: string } | null;
+  topDay: { day: string; hours: number } | null;
+  topTrack: { track: string; artist: string; hours: number; cover: string | null } | null;
+  topMonth: { ym: string; hours: number } | null;
+  happiestYear: { year: number; valence: number } | null;
+}
+
 export interface Comparison {
+  v: number;
+  topArtists: { me: TopItem[]; them: TopItem[] };
+  topTracks: { me: TopItem[]; them: TopItem[] };
+  yearsDetail: Array<{ year: number; me: string | null; them: string | null; meH: number; themH: number; shared: boolean }>;
+  records: { me: Records; them: Records };
+  sync: { days: number; tracks: number; examples: Array<{ day: string; track: string; artist: string; cover: string | null }>; sameArtistDays: number };
   score: number;
   parts: Array<{ key: string; label: string; value: number; weight: number; desc: string }>;
   me: Side;
@@ -348,5 +372,92 @@ export async function compareWith(theirName: string): Promise<Comparison> {
   const wsum = parts.reduce((s, p) => s + p.weight, 0);
   const score = Math.round((100 * parts.reduce((s, p) => s + p.value * p.weight, 0)) / wsum);
 
-  return { score, parts, me, them, overlap, byYear, firstFound, sharedArtists, theirGems, myGems, sharedTracks, theirTracks, tags, moodMix, moodMonthly, hours24 };
+  // Tops, years, records, "in sync" days.
+  const topArtistsSql = (src: string) => `
+    SELECT x.artist AS label, sum(x.minutes) / 60 AS hours, arg_max(c.cover, x.minutes) FILTER (WHERE c.cover IS NOT NULL) AS cover
+    FROM ${src} x LEFT JOIN cmeta c USING (uri) GROUP BY 1 ORDER BY 2 DESC LIMIT 10`;
+  const topTracksSql = (src: string) => `
+    SELECT any_value(x.track) AS label, any_value(x.artist) AS sub, sum(x.minutes) / 60 AS hours, any_value(c.cover) AS cover
+    FROM ${src} x LEFT JOIN cmeta c USING (uri) GROUP BY x.uri ORDER BY 3 DESC LIMIT 10`;
+  const [taMe, taThem, ttMe, ttThem] = await Promise.all([
+    query<TopItem>(topArtistsSql(ME)),
+    query<TopItem>(topArtistsSql('o')),
+    query<TopItem>(topTracksSql(ME)),
+    query<TopItem>(topTracksSql('o')),
+  ]);
+  const topOf = (rows: Array<{ y: number; artist: string; m: number }>, y: number) => {
+    let best: { artist: string; m: number } | null = null;
+    for (const r of rows) if (r.y === y && (!best || r.m > best.m)) best = r;
+    return best;
+  };
+  const allYears = [...new Set([...yMe.map((r) => r.y), ...yThem.map((r) => r.y)])].sort((a, b) => a - b);
+  const yearsDetail = allYears.map((y) => {
+    const a = topOf(yMe, y);
+    const b = topOf(yThem, y);
+    const meH = yMe.filter((r) => r.y === y).reduce((s, r) => s + r.m, 0) / 60;
+    const themH = yThem.filter((r) => r.y === y).reduce((s, r) => s + r.m, 0) / 60;
+    return { year: y, me: a?.artist ?? null, them: b?.artist ?? null, meH, themH, shared: !!a && !!b && a.artist === b.artist };
+  });
+
+  const recordsOf = async (src: string): Promise<Records> => {
+    const [streak] = await query<{ days: number; from: string; to: string }>(`
+      WITH d AS (SELECT DISTINCT day FROM ${src}), g AS (SELECT day, day - CAST(row_number() OVER (ORDER BY day) AS INTEGER) AS grp FROM d)
+      SELECT count(*) AS days, min(day)::VARCHAR AS "from", max(day)::VARCHAR AS "to" FROM g GROUP BY grp ORDER BY days DESC LIMIT 1`);
+    // Days over 24 h exist in exports (plays overlapping on two devices): not a real record, skipped.
+    const [topDay] = await query<{ day: string; hours: number }>(
+      `SELECT day::VARCHAR AS day, sum(minutes) / 60 AS hours FROM ${src} GROUP BY day HAVING sum(minutes) <= 1440 ORDER BY 2 DESC LIMIT 1`,
+    );
+    const [topMonth] = await query<{ ym: string; hours: number }>(`SELECT strftime(day, '%Y-%m') AS ym, sum(minutes) / 60 AS hours FROM ${src} GROUP BY 1 ORDER BY 2 DESC LIMIT 1`);
+    const [happy] = await query<{ year: number; valence: number }>(`
+      SELECT year(x.day) AS year, sum(c.valence * x.minutes) / sum(x.minutes) AS valence FROM ${src} x JOIN cmeta c USING (uri)
+      WHERE c.valence IS NOT NULL GROUP BY 1 HAVING sum(x.minutes) > 600 ORDER BY 2 DESC LIMIT 1`);
+    const t = (src === 'o' ? ttThem : ttMe)[0];
+    return {
+      streak: streak ?? null,
+      topDay: topDay ?? null,
+      topMonth: topMonth ?? null,
+      happiestYear: happy ?? null,
+      topTrack: t ? { track: t.label, artist: t.sub ?? '', hours: t.hours, cover: t.cover } : null,
+    };
+  };
+  const [recMe, recThem] = await Promise.all([recordsOf(ME), recordsOf('o')]);
+
+  const [syncN] = await query<{ days: number; tracks: number }>(`
+    WITH a AS (SELECT DISTINCT day, uri FROM ${ME} WHERE counted), b AS (SELECT DISTINCT day, uri FROM o WHERE counted)
+    SELECT count(DISTINCT day) AS days, count(DISTINCT uri) AS tracks FROM a JOIN b USING (day, uri)`);
+  const syncEx = await query<{ day: string; track: string; artist: string; cover: string | null }>(`
+    WITH a AS (SELECT DISTINCT day, uri FROM ${ME} WHERE counted), b AS (SELECT DISTINCT day, uri FROM o WHERE counted),
+    j AS (SELECT day, uri FROM a JOIN b USING (day, uri)),
+    t AS (SELECT uri, any_value(track) AS track, any_value(artist) AS artist FROM ${ME} GROUP BY uri)
+    SELECT j.day::VARCHAR AS day, t.track, t.artist, c.cover FROM j JOIN t USING (uri) LEFT JOIN cmeta c USING (uri)
+    QUALIFY row_number() OVER (PARTITION BY j.uri ORDER BY j.day) = 1
+    ORDER BY j.day DESC LIMIT 8`);
+  const [sameArtist] = await query<{ n: number }>(`
+    WITH a AS (SELECT DISTINCT day, artist FROM ${ME} WHERE counted), b AS (SELECT DISTINCT day, artist FROM o WHERE counted)
+    SELECT count(DISTINCT day) AS n FROM a JOIN b USING (day, artist)`);
+
+  return {
+    v: COMPARE_VERSION,
+    topArtists: { me: taMe, them: taThem },
+    topTracks: { me: ttMe, them: ttThem },
+    yearsDetail,
+    records: { me: recMe, them: recThem },
+    sync: { days: syncN?.days ?? 0, tracks: syncN?.tracks ?? 0, examples: syncEx, sameArtistDays: sameArtist?.n ?? 0 },
+    score,
+    parts,
+    me,
+    them,
+    overlap,
+    byYear,
+    firstFound,
+    sharedArtists,
+    theirGems,
+    myGems,
+    sharedTracks,
+    theirTracks,
+    tags,
+    moodMix,
+    moodMonthly,
+    hours24,
+  };
 }

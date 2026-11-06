@@ -22,6 +22,8 @@ export interface AnalysisRow {
   first_day: string | null
   last_day: string | null
   display_name: string | null
+  /** When every enrichment step last finished (null = never, or new data imported since). */
+  enriched_at: number | null
   bytes: number
 }
 
@@ -95,7 +97,7 @@ CREATE TABLE IF NOT EXISTS images (
 );
 `
 
-const META_FIELDS = ['history_kind', 'rows', 'first_day', 'last_day', 'display_name'] as const
+const META_FIELDS = ['history_kind', 'rows', 'first_day', 'last_day', 'display_name', 'enriched_at'] as const
 type AnalysisMeta = Partial<Pick<AnalysisRow, (typeof META_FIELDS)[number] | 'name'>>
 
 const chunks = <T,>(xs: T[], n = 500): T[][] => {
@@ -111,6 +113,9 @@ export class Store {
     if (file !== ':memory:') mkdirSync(dirname(file), { recursive: true })
     this.db = new DatabaseSync(file)
     this.db.exec(SCHEMA)
+    // Columns added after the first release.
+    const cols = this.db.prepare(`PRAGMA table_info(analyses)`).all() as Array<{ name: string }>
+    if (!cols.some((c) => c.name === 'enriched_at')) this.db.exec(`ALTER TABLE analyses ADD COLUMN enriched_at INTEGER`)
   }
 
   close() {

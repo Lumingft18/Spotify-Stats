@@ -8,6 +8,7 @@ import { autoMoodAi, stopMoodAi } from './moodAi';
 import { autoEmbeddings, stopEmbeddings } from './embedAi';
 import { isEnrichmentHeld } from './pause';
 import { applyMoodAdjustments } from '../data/moodAdjust';
+import { markCompleteIfDone, markWork } from './completion';
 import { fetchArtistTagsMB, fetchAudioFeatures, fetchCover, fetchLyrics, fetchTags, type TrackRef } from './providers';
 
 export type StepId = 'covers' | 'audiofeatures' | 'lyrics' | 'tags';
@@ -209,6 +210,7 @@ async function runStepNow(step: StepId, limit: number): Promise<void> {
       job('done');
       return;
     }
+    markWork();
 
     const batches: TrackRef[][] = [];
     for (let i = 0; i < items.length; i += d.batch) batches.push(items.slice(i, i + d.batch));
@@ -310,7 +312,7 @@ export function runAllEnabled() {
 function runAllEnabledNow() {
   const s = getApp().settings;
   const runs: Array<Promise<void>> = [];
-  if (s.connections.covers) void runStep('covers');
+  const covers = s.connections.covers ? runStep('covers') : Promise.resolve();
   if (s.connections.audiofeatures) runs.push(runStep('audiofeatures'));
   // Every track, most-listened first, at the providers' polite rates. Results land in the shared catalog,
   // so only the first analysis that meets a song pays the wait.
@@ -318,7 +320,12 @@ function runAllEnabledNow() {
   if (s.connections.lastfm) runs.push(runStep('tags'));
   // AI mood and the taste map need lyrics/tags (their input) and audio features (anchors): they start ONCE,
   // when all of those are in. Starting earlier meant a partial run, then new candidates and a second run.
-  void Promise.all(runs).then(() => Promise.all([autoMoodAi(), autoEmbeddings()]));
+  // When everything is in, record the analysis as complete (Confronta waits for it).
+  void Promise.all(runs)
+    .then(() => Promise.all([autoMoodAi(), autoEmbeddings()]))
+    .then(() => covers)
+    .then(() => markCompleteIfDone())
+    .catch((e) => console.warn('completamento analisi', e));
 }
 
 export async function resetTried() {
