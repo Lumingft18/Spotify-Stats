@@ -48,6 +48,40 @@ export function Galaxy({
   const [hover, setHover] = useState<GalaxyPoint | null>(null);
   const [lasso, setLasso] = useState<Array<[number, number]> | null>(null);
   const drag = useRef<{ x: number; y: number; tx: number; ty: number; moved: boolean; lasso: boolean } | null>(null);
+  const [zoomHint, setZoomHint] = useState(false);
+  const hintTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  /** Zoom by factor around a point in canvas coordinates (default: center). */
+  const zoomAt = (factor: number, mx = size.w / 2, my = size.h / 2) =>
+    setView((v) => {
+      const k = Math.min(40, Math.max(0.5, v.k * factor));
+      const f = k / v.k;
+      return { k, tx: mx - (mx - v.tx) * f, ty: my - (my - v.ty) * f };
+    });
+
+  // Wheel: a plain wheel scrolls the PAGE (no fight with page scroll); ⌘/Ctrl + wheel and trackpad pinch
+  // (reported as ctrl+wheel) zoom the map. Native non-passive listener: React's onWheel can't preventDefault.
+  useEffect(() => {
+    const el = canvas.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      if (!(e.ctrlKey || e.metaKey)) {
+        setZoomHint(true);
+        if (hintTimer.current) clearTimeout(hintTimer.current);
+        hintTimer.current = setTimeout(() => setZoomHint(false), 1200);
+        return;
+      }
+      e.preventDefault();
+      const r = el.getBoundingClientRect();
+      // Smooth, proportional to the gesture (pinch sends many small deltas, a mouse wheel few large ones).
+      const factor = Math.exp(-Math.max(-50, Math.min(50, e.deltaY)) * 0.01);
+      zoomAt(factor, e.clientX - r.left, e.clientY - r.top);
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+    // zoomAt only reads size via closure; re-bind when it changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [size.w, size.h]);
 
   // Normalize data coordinates into [pad, size-pad].
   const norm = useMemo(() => {
@@ -156,7 +190,7 @@ export function Galaxy({
     return best;
   };
 
-  const local = (e: React.PointerEvent | React.WheelEvent) => {
+  const local = (e: React.PointerEvent) => {
     const r = canvas.current!.getBoundingClientRect();
     return [e.clientX - r.left, e.clientY - r.top] as const;
   };
@@ -168,12 +202,6 @@ export function Galaxy({
         style={{ width: size.w, height: size.h, touchAction: 'none', cursor: hover ? 'pointer' : 'grab' }}
         aria-label="Mappa dei brani: punti vicini suonano simili"
         role="img"
-        onWheel={(e) => {
-          const [mx, my] = local(e);
-          const k = Math.min(40, Math.max(0.5, view.k * (e.deltaY < 0 ? 1.15 : 1 / 1.15)));
-          const f = k / view.k;
-          setView({ k, tx: mx - (mx - view.tx) * f, ty: my - (my - view.ty) * f });
-        }}
         onPointerDown={(e) => {
           (e.target as HTMLElement).setPointerCapture(e.pointerId);
           const [mx, my] = local(e);
@@ -217,8 +245,24 @@ export function Galaxy({
           {hover.sub && <div className="truncate text-text-muted">{hover.sub}</div>}
         </div>
       )}
+      <div className="absolute right-3 top-3 flex flex-col overflow-hidden rounded-xl border border-border bg-surface-2/90 backdrop-blur">
+        <button type="button" aria-label="Ingrandisci" className="grid size-8 place-items-center text-text-muted hover:bg-surface-3 hover:text-text" onClick={() => zoomAt(1.4)}>
+          +
+        </button>
+        <button type="button" aria-label="Riduci" className="grid size-8 place-items-center border-t border-border text-text-muted hover:bg-surface-3 hover:text-text" onClick={() => zoomAt(1 / 1.4)}>
+          −
+        </button>
+        <button type="button" aria-label="Vista iniziale" className="grid size-8 place-items-center border-t border-border text-[10px] text-text-muted hover:bg-surface-3 hover:text-text" onClick={() => setView({ k: 1, tx: 0, ty: 0 })}>
+          ⟲
+        </button>
+      </div>
+      {zoomHint && (
+        <div className="pointer-events-none absolute inset-0 grid place-items-center bg-black/35 text-sm font-medium text-white transition-opacity">
+          Tieni premuto ⌘ (o pizzica sul trackpad) per lo zoom
+        </div>
+      )}
       <div className="pointer-events-none absolute bottom-2 right-3 text-[11px] text-text-faint">
-        rotella = zoom · trascina = sposta · {onLasso ? 'Shift+trascina = seleziona · ' : ''}doppio click = reset
+        ⌘ + rotella o pizzico = zoom · trascina = sposta · {onLasso ? 'Shift+trascina = seleziona · ' : ''}doppio click = reset
       </div>
     </div>
   );
