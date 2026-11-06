@@ -1,13 +1,15 @@
 import { useCallback, useState } from 'react';
 import { ThumbsDown, ThumbsUp, Wand2, RefreshCw, Info } from 'lucide-react';
 import { useAsync } from '../../data/useSql';
-import { artistSurvival, detectEras, rediscoveryCandidates, rediscoveryFeedback, trainSkipModel, type Candidate, type Era } from '../../ml/models';
+import { artistSurvival, detectEras, rediscoveryCandidates, rediscoveryFeedback, sensitivity, trainSkipModel, type Candidate, type Era } from '../../ml/models';
+import { dataQuality } from '../../data/quality';
+import { MOODS } from '../../lib/mood';
 import { nameErasWithLLM } from '../../llm/narrate';
 import { useLlmAvailable } from '../../llm/client';
 import { fmtDate, fmtHours, fmtInt, fmtMonth, fmtPct } from '../../lib/format';
 import { routes } from '../../lib/router';
 import { spotifyId } from '../../enrichment/providers';
-import { Badge, Button, Card, Empty, ErrorNote, PageHeader, Section, Skeleton, Spinner } from '../../components/ui';
+import { Badge, Button, Card, Empty, ErrorNote, PageHeader, Section, Skeleton, Spinner, cx } from '../../components/ui';
 import { Cover } from '../../components/Cover';
 import { PlotChart, Plot } from '../../components/charts/PlotChart';
 import { StoryButton } from '../../components/StoryButton';
@@ -55,16 +57,32 @@ function SkipModel() {
   if (res.loading) return <Skeleton className="h-64" />;
   if (res.error) return <ErrorNote>{res.error}</ErrorNote>;
   if (!m) return <Empty title="Servono almeno 500 ascolti nel periodo" />;
-  const strong = m.effects.filter((e) => e.importance > 0.003).slice(0, 5);
+  // A factor counts only if its AUC drop clearly exceeds the permutation noise.
+  const strong = m.effects.filter((e) => e.importance > 0.003 && e.importance > 2 * e.importanceSd).slice(0, 5);
   return (
     <div className="flex flex-col gap-6">
       <div className="grid gap-6 lg:grid-cols-[1.1fr_1fr]">
         <Card>
-          <div className="mb-1 flex items-center gap-2">
+          <div className="mb-1 flex flex-wrap items-center gap-2">
             <Badge tone={m.auc > 0.7 ? 'good' : 'neutral'}>AUC {m.auc.toFixed(2)}</Badge>
-            <span className="text-xs text-text-faint">
-              addestrato su {fmtInt(m.nTrain)} ascolti, verificato sugli ultimi {fmtInt(m.nTest)}
+            <span className="num text-xs text-text-faint">
+              IC 95% {m.aucCI[0].toFixed(2)}–{m.aucCI[1].toFixed(2)} · addestrato su {fmtInt(m.nTrain)} ascolti, verificato sugli ultimi {fmtInt(m.nTest)}
             </span>
+          </div>
+          <div className="num mt-2 grid grid-cols-3 gap-2 text-xs">
+            {[
+              { k: 'Solo “slancio”', v: m.baselines.momentum, ci: m.baselines.momentumCI, d: 'salto precedente, avanti' },
+              { k: 'Solo il brano', v: m.baselines.preference, ci: m.baselines.preferenceCI, d: 'familiarità, mood, somiglianza' },
+              { k: 'Modello completo', v: m.auc, ci: m.aucCI, d: 'tutte le caratteristiche' },
+            ].map((b) => (
+              <div key={b.k} className="rounded-xl border border-border p-2">
+                <div className="text-text-muted">{b.k}</div>
+                <div className="text-base text-text">{b.v.toFixed(2)}</div>
+                <div className="text-text-faint">
+                  {b.ci[0].toFixed(2)}–{b.ci[1].toFixed(2)} · {b.d}
+                </div>
+              </div>
+            ))}
           </div>
           <h3 className="mt-3 text-lg font-medium">Cosa ti fa saltare un brano</h3>
           <ol className="mt-3 flex flex-col gap-3">
@@ -75,6 +93,9 @@ function SkipModel() {
                   <div className="text-text">{e.sentence.charAt(0).toUpperCase() + e.sentence.slice(1)}</div>
                   <div className="mt-1 flex items-center gap-2 text-xs text-text-faint">
                     {e.name}
+                    <span className="num">
+                      ΔAUC {e.importance.toFixed(3)} ± {e.importanceSd.toFixed(3)}
+                    </span>
                     <div className="h-1 w-24 rounded-full bg-surface-3">
                       <div className="h-full rounded-full bg-[var(--accent)]" style={{ width: `${Math.min(100, (e.importance / Math.max(1e-6, strong[0].importance)) * 100)}%` }} />
                     </div>
@@ -85,10 +106,14 @@ function SkipModel() {
             {!strong.length && <li className="text-sm text-text-muted">Nessun fattore spicca: i tuoi salti sono abbastanza casuali.</li>}
           </ol>
           <Explain>
-            Regressione logistica addestrata nel browser su {14} caratteristiche di ogni ascolto (ora, shuffle, posizione nella sessione, quante volte
-            l’avevi già sentito, somiglianza con il brano precedente via embedding, mood…). La validazione è temporale: il modello impara dal passato e
-            viene giudicato sugli ascolti più recenti. L’importanza è misurata permutando ogni caratteristica e guardando quanto peggiora l’AUC
-            (0,5 = caso, 1 = perfetto).
+            Regressione logistica addestrata nel browser su {m.effects.length} caratteristiche di ogni ascolto; “salto” = brano chiuso con il tasto
+            avanti (definizione uguale in tutti gli anni dell’export). La validazione è temporale: il
+            modello impara dal passato e viene giudicato sugli ascolti più recenti (AUC: 0,5 = caso, 1 = perfetto; intervallo bootstrap al 95%). Due
+            modelli più semplici fanno da confronto: “slancio” usa solo ciò che è appena successo (brano prima saltato, brano arrivato con avanti);
+            “solo il brano” usa solo familiarità, mood e somiglianza. La differenza tra completo e slancio è quanto conta davvero il brano.
+            L’importanza è la perdita media di AUC su {8} permutazioni della caratteristica (± deviazione standard); la direzione è il segno del
+            coefficiente. Un fattore è mostrato solo se supera il doppio del rumore. I mood mancanti hanno un indicatore a parte, non vengono
+            trattati come “neutri”.
           </Explain>
         </Card>
         <div className="flex flex-col gap-4">
@@ -230,8 +255,10 @@ function Lifecycle() {
           />
         </div>
         <Explain>
-          Stimatore di Kaplan–Meier: un artista “esce” quando passano più di {v.churnGapDays} giorni senza ascoltarlo. Gli artisti ancora attivi
-          sono trattati come osservazioni censurate, quindi la curva non penalizza le scoperte recenti.
+          Stimatore di Kaplan–Meier su {fmtInt(v.n)} artisti con almeno 3 giorni di ascolto: un artista “esce” quando passano più di{' '}
+          {v.churnGapDays} giorni senza ascoltarlo. Gli artisti ancora attivi sono osservazioni censurate, quindi la curva non penalizza le
+          scoperte recenti. {fmtInt(v.leftTruncated)} artisti sono esclusi perché li ascoltavi già all’inizio dei dati: la loro vera data di
+          scoperta è sconosciuta. Quanto cambia il risultato con altre soglie è in “Affidabilità” più sotto.
         </Explain>
       </Card>
       <div className="flex flex-col gap-6">
@@ -324,6 +351,134 @@ function Rediscovery() {
   );
 }
 
+function Reliability() {
+  const epoch = useApp((s) => s.epoch);
+  const q = useAsync(dataQuality, [epoch]);
+  const sens = useAsync(sensitivity, [epoch]);
+  const yearChart = useCallback(
+    () => ({
+      height: 180,
+      marginLeft: 40,
+      x: { label: null, tickFormat: (y: number) => String(y) },
+      y: { label: 'quota', grid: true, domain: [0, 1], tickFormat: (v: number) => `${Math.round(v * 100)}%` },
+      color: { legend: true },
+      marks: [
+        Plot.lineY(
+          (q.value?.byYear ?? []).flatMap((r) => [
+            { year: r.year, v: r.skipRate, k: 'salti' },
+            { year: r.year, v: r.fwdShare, k: 'chiusi con avanti' },
+            { year: r.year, v: r.mobileShare, k: 'da telefono' },
+            { year: r.year, v: r.shuffleShare, k: 'in shuffle' },
+          ]),
+          { x: 'year', y: 'v', stroke: 'k', strokeWidth: 2, marker: 'dot' },
+        ),
+      ],
+    }),
+    [q.value],
+  );
+  if (q.loading || sens.loading) return <Skeleton className="h-60" />;
+  const d = q.value;
+  const s = sens.value;
+  return (
+    <div className="grid gap-6 lg:grid-cols-2">
+      {d && (
+        <Card className="p-4 text-sm">
+          <div className="mb-2 text-lg font-medium">Pulizia dei dati</div>
+          <ul className="flex flex-col gap-1 text-text-muted">
+            <li>
+              <span className="num text-text">{fmtInt(d.rawRows)}</span> righe nell’export ·{' '}
+              <span className="num text-text">{fmtInt(d.duplicatesRemoved)}</span> duplicati rimossi (stesso brano e stesso istante: tenuto il più lungo) ·{' '}
+              <span className="num text-text">{fmtInt(d.excludedRows)}</span> esclusi da te
+            </li>
+            <li>
+              <span className="num text-text">{fmtInt(d.short)}</span> riproduzioni sotto i 30 s: restano per salti e sessioni, non contano come ascolti
+            </li>
+            <li>
+              Mood:{' '}
+              {d.mood.map((m) => `${{ reccobeats: 'misurato', llm: 'stimato LLM', llm_pending: 'stimato LLM (da rifare)', sage: 'stimato Sage', nessuno: 'assente' }[m.source] ?? m.source} ${fmtPct(m.minutesShare)}`).join(' · ')}{' '}
+              del tempo di ascolto
+            </li>
+          </ul>
+          <div className="mt-4 text-xs text-text-muted">Segnali grezzi anno per anno</div>
+          <PlotChart make={yearChart} height={180} ariaLabel="Tasso di salto e abitudini per anno" />
+          <Explain>
+            Il campo “salto” esplicito compare negli export solo dal 2022: prima, l’unico segnale è “chiuso con avanti”. Per questo le due linee
+            coincidono fino al 2021 e poi si separano. Il modello degli skip usa “chiuso con avanti”, registrato allo stesso modo in tutti gli anni,
+            così l’etichetta non cambia significato a metà serie. Anche telefono e shuffle cambiano nel tempo: confrontare anni diversi richiede
+            cautela.
+          </Explain>
+        </Card>
+      )}
+      {s && (
+        <Card className="p-4 text-sm">
+          <div className="mb-2 text-lg font-medium">Sensibilità alle soglie</div>
+          <div className="text-xs text-text-muted">Ciclo di vita: soglia di abbandono → mediana</div>
+          <table className="num mt-1 w-full text-left text-xs">
+            <tbody>
+              {s.survival.map((r) => (
+                <tr key={r.churnGapDays} className="border-t border-border">
+                  <td className="py-1 pr-3">{r.churnGapDays} giorni</td>
+                  <td className="py-1 pr-3">{r.medianDays != null ? `${fmtInt(r.medianDays)} giorni` : 'oltre i dati'}</td>
+                  <td className="py-1 text-text-faint">{fmtInt(r.n)} artisti</td>
+                </tr>
+              ))}
+              <tr className="border-t border-border text-text-faint">
+                <td className="py-1 pr-3">90 g, senza escludere i già noti</td>
+                <td className="py-1 pr-3">{s.survivalNoTruncation.medianDays != null ? `${fmtInt(s.survivalNoTruncation.medianDays)} giorni` : 'oltre i dati'}</td>
+                <td className="py-1">{fmtInt(s.survivalNoTruncation.n)} artisti</td>
+              </tr>
+            </tbody>
+          </table>
+          <div className="mt-4 text-xs text-text-muted">Ere: penalità → numero di ere</div>
+          <div className="num mt-1 flex flex-wrap gap-2 text-xs">
+            {s.eras.map((e) => (
+              <span key={e.penalty} className="rounded-full border border-border px-2 py-0.5">
+                {e.penalty} → {e.eras}
+              </span>
+            ))}
+          </div>
+          <div className="mt-1 text-xs text-text-faint">
+            {fmtPct(s.eraStability)} dei confini trovati con la penalità predefinita (0,04) ricompare (±1 mese) anche con quella più fine e quella più grossolana.
+          </div>
+          <div className="mt-4 text-xs text-text-muted">Mood: quote spostando il centro di ±0,05</div>
+          <table className="num mt-1 w-full text-left text-xs">
+            <thead className="text-text-faint">
+              <tr>
+                <th className="font-normal">Δ valence, Δ energia</th>
+                {MOODS.map((m) => (
+                  <th key={m.id} className="font-normal">
+                    {m.label}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {s.moodShift.map((r) => (
+                <tr key={`${r.dv}_${r.de}`} className={cx('border-t border-border', r.dv === 0 && r.de === 0 && 'text-text')}>
+                  <td className="py-1 pr-2 text-text-faint">
+                    {r.dv >= 0 ? '+' : ''}
+                    {r.dv}, {r.de >= 0 ? '+' : ''}
+                    {r.de}
+                  </td>
+                  {MOODS.map((m) => (
+                    <td key={m.id} className="py-1 pr-2">
+                      {fmtPct(r.shares[m.id] ?? 0)}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <Explain>
+            Ogni soglia scelta a mano viene rifatta con valori vicini. Se una conclusione regge con tutte, è solida; se cambia molto, va letta con
+            cautela.
+          </Explain>
+        </Card>
+      )}
+    </div>
+  );
+}
+
 export default function InsightsPage() {
   return (
     <div className="flex flex-col gap-14">
@@ -339,6 +494,9 @@ export default function InsightsPage() {
       </Section>
       <Section kicker="Ciclo di vita degli artisti" title="Quanto durano le tue passioni">
         <Lifecycle />
+      </Section>
+      <Section kicker="Affidabilità" title="Quanto fidarsi di questi numeri">
+        <Reliability />
       </Section>
       <p className="text-xs text-text-faint">
         {fmtPct(1)} locale: modelli calcolati con DuckDB e TypeScript nel browser. Le ere e i suggerimenti seguono il periodo selezionato in alto.

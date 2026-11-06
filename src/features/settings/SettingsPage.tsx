@@ -1,15 +1,17 @@
 import { useRef, useState } from 'react';
 import { EyeOff, RotateCcw, ShieldCheck, Trash2, Upload, Globe, KeyRound, Clock, Save, CheckCircle2 } from 'lucide-react';
 import { checkOpenRouterKey } from '../../llm/client';
+import { checkSageKey } from '../../llm/sage';
 import { catalogSize, clearCatalog } from '../../lib/catalogCache';
 import { useAsync } from '../../data/useSql';
-import { ENV_KEYS, useApp, type ConnectionId } from '../../lib/store';
+import { ENV_KEYS, useApp, type ConnectionId, type MoodProvider } from '../../lib/store';
 import { getExcluded, query, loadPlays, wipeAll } from '../../data/db';
 import { afterDataLoaded, importFiles, includeAll, includeTrack } from '../../data/lifecycle';
 import { emptyColumns, makeLocalizer, PLAY_COLUMNS, type PlayColumns } from '../../data/normalize';
 import { resetTried, runAllEnabled, stopAll } from '../../enrichment/jobs';
 import { autoMoodAi, MOOD_AI_JOB, stopMoodAi } from '../../enrichment/moodAi';
 import { clearIndexCache } from '../../ml/embeddings';
+import { autoEmbeddings, EMBED_JOB, stopEmbeddings } from '../../enrichment/embedAi';
 import { Button, Card, ErrorNote, PageHeader, Section, Spinner, cx } from '../../components/ui';
 
 const CONNECTIONS: Array<{ id: ConnectionId; title: string; host: string; sends: string }> = [
@@ -18,6 +20,7 @@ const CONNECTIONS: Array<{ id: ConnectionId; title: string; host: string; sends:
   { id: 'lyrics', title: 'Testi', host: 'lrclib.net', sends: 'titolo, artista, album e durata dei brani più ascoltati' },
   { id: 'lastfm', title: 'Tag e generi', host: 'musicbrainz.org (o Last.fm se inserisci la chiave)', sends: 'nome degli artisti (MusicBrainz) oppure titolo e artista (Last.fm)' },
   { id: 'llm', title: 'Funzioni AI (mappa del gusto, mood, nomi, assistente)', host: 'openrouter.ai', sends: 'titoli, artisti, album, tag, estratti di testo e risultati delle query; mai lo storico completo' },
+  { id: 'sage', title: 'Levanto Sage (stima del mood, facoltativa)', host: 'sage.levanto.ai', sends: 'titolo, artista, tag ed estratto del testo dei brani senza audio features' },
 ];
 
 function Toggle({ on, onChange, label }: { on: boolean; onChange: (v: boolean) => void; label: string }) {
@@ -89,6 +92,7 @@ function KeysForm() {
   const [draft, setDraft] = useState({
     openrouterKey: settings.openrouterKey,
     lastfmKey: settings.lastfmKey,
+    sageKey: settings.sageKey,
     llmModelBulk: settings.llmModelBulk,
     llmModelAgent: settings.llmModelAgent,
   });
@@ -96,6 +100,7 @@ function KeysForm() {
   const dirty =
     draft.openrouterKey !== settings.openrouterKey ||
     draft.lastfmKey !== settings.lastfmKey ||
+    draft.sageKey !== settings.sageKey ||
     draft.llmModelBulk !== settings.llmModelBulk ||
     draft.llmModelAgent !== settings.llmModelAgent;
   const set = (k: keyof typeof draft) => (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -118,12 +123,24 @@ function KeysForm() {
         msg = 'Salvato (non è stato possibile verificare la chiave: sei offline?).';
       }
     }
+    if (draft.sageKey && draft.sageKey !== settings.sageKey) {
+      try {
+        if (!(await checkSageKey(draft.sageKey))) {
+          setState({ kind: 'error', msg: 'Levanto non riconosce la chiave Sage.' });
+          return;
+        }
+        msg += ' Chiave Sage valida.';
+      } catch {
+        msg += ' (Chiave Sage non verificata: sei offline?)';
+      }
+    }
     update({
       ...draft,
       connections: {
         ...settings.connections,
         llm: draft.openrouterKey ? true : settings.connections.llm,
         lastfm: draft.lastfmKey ? true : settings.connections.lastfm,
+        sage: draft.sageKey ? true : settings.connections.sage,
       },
     });
     setState({ kind: 'ok', msg });
@@ -180,6 +197,22 @@ function KeysForm() {
         />
         <span className="text-xs text-text-faint">Gratuita su last.fm/api/account/create. Serve per tag e generi.</span>
       </label>
+      <label className="flex flex-col gap-1 text-sm">
+        <span className="flex items-center gap-2 font-medium">
+          <KeyRound size={14} /> Levanto Sage <span className="text-xs font-normal text-text-faint">(facoltativa)</span>
+        </span>
+        <input
+          type="password"
+          autoComplete="off"
+          value={draft.sageKey}
+          onChange={set('sageKey')}
+          placeholder="lv_live_…"
+          className="h-10 rounded-xl border border-border bg-surface-2 px-3 font-mono text-sm"
+        />
+        <span className="text-xs text-text-faint">
+          Modello di decisione (platform.levanto.ai). Stimatore alternativo del mood, confrontato con l’LLM nel benchmark della pagina Mood.
+        </span>
+      </label>
       <div className="flex flex-wrap items-center gap-3">
         <Button variant="primary" onClick={() => void save()} disabled={!dirty || state.kind === 'saving'}>
           {state.kind === 'saving' ? <Spinner size={14} /> : <Save size={14} />} Salva
@@ -203,16 +236,16 @@ function MoodAiSettings() {
   const settings = useApp((s) => s.settings);
   const update = useApp((s) => s.updateSettings);
   const job = useApp((s) => s.jobs[MOOD_AI_JOB]);
-  const hasKey = settings.connections.llm && !!settings.openrouterKey;
+  const hasKey = settings.moodProvider === 'sage' ? settings.connections.sage && !!settings.sageKey : settings.connections.llm && !!settings.openrouterKey;
   const running = job?.status === 'running';
   return (
     <Card className="flex flex-col gap-4">
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0">
-          <div className="font-medium">Avvia da solo quando c’è una chiave OpenRouter</div>
+          <div className="font-medium">Avvia da solo quando c’è una chiave</div>
           <div className="text-xs text-text-faint">
             Dopo copertine, audio features, testi e tag, stima valence ed energia dei brani che ne sono privi (dai più ascoltati), usando testo e generi.
-            Invia a OpenRouter titolo, artista, tag e un estratto del testo. {hasKey ? '' : 'Ora non c’è una chiave: non parte.'}
+            Prima verifica lo stimatore su brani misurati (benchmark): se non batte la media non scrive nulla. Invia titolo, artista, tag e un estratto del testo. {hasKey ? '' : 'Ora non c’è una chiave: non parte.'}
           </div>
         </div>
         <Toggle
@@ -238,8 +271,71 @@ function MoodAiSettings() {
             className="h-9 w-24 rounded-lg border border-border bg-surface-1 px-2 text-sm text-text"
           />
         </label>
+        <label className="flex items-center gap-2 text-sm text-text-muted">
+          Stimatore
+          <select
+            value={settings.moodProvider}
+            onChange={(e) => update({ moodProvider: e.target.value as MoodProvider })}
+            className="h-9 rounded-lg border border-border bg-surface-1 px-2 text-sm text-text"
+          >
+            <option value="openrouter">LLM via OpenRouter</option>
+            <option value="sage">Levanto Sage</option>
+          </select>
+        </label>
         {running ? (
           <Button size="sm" variant="danger" onClick={stopMoodAi}>
+            Ferma ({job.done}/{job.total})
+          </Button>
+        ) : (
+          job && <span className="text-xs text-text-faint">Ultimo avvio: {{ done: 'completato', paused: 'fermato', error: `errore${job.detail ? ` — ${job.detail}` : ''}`, running: '' }[job.status]}</span>
+        )}
+      </div>
+    </Card>
+  );
+}
+
+function EmbeddingSettings() {
+  const settings = useApp((s) => s.settings);
+  const update = useApp((s) => s.updateSettings);
+  const job = useApp((s) => s.jobs[EMBED_JOB]);
+  const hasKey = settings.connections.llm && !!settings.openrouterKey;
+  const running = job?.status === 'running';
+  return (
+    <Card className="flex flex-col gap-4">
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0">
+          <div className="font-medium">Crea la mappa del gusto da sola quando c’è una chiave OpenRouter</div>
+          <div className="text-xs text-text-faint">
+            Dopo testi e tag calcola gli embedding dei brani più ascoltati, poi mappa UMAP e gruppi (cluster) nel browser. Serve a galassia, ricerca
+            semantica, brani simili e somiglianza tra brani consecutivi nel modello degli skip. Invia a OpenRouter titolo, artista, album, tag e un
+            estratto del testo. Costo indicativo ~$0,05 ogni 1.000 brani. {hasKey ? '' : 'Ora non c’è una chiave: non parte.'}
+          </div>
+        </div>
+        <Toggle
+          label="Avvio automatico mappa del gusto"
+          on={settings.autoEmbeddings}
+          onChange={(v) => {
+            update({ autoEmbeddings: v });
+            if (v) setTimeout(() => void autoEmbeddings(), 50);
+            else stopEmbeddings();
+          }}
+        />
+      </div>
+      <div className="flex flex-wrap items-center gap-3">
+        <label className="flex items-center gap-2 text-sm text-text-muted">
+          Brani nella mappa
+          <input
+            type="number"
+            min={200}
+            max={20000}
+            step={100}
+            value={settings.autoEmbeddingsLimit}
+            onChange={(e) => update({ autoEmbeddingsLimit: Math.max(200, Math.min(20000, Number(e.target.value) || 200)) })}
+            className="h-9 w-24 rounded-lg border border-border bg-surface-1 px-2 text-sm text-text"
+          />
+        </label>
+        {running ? (
+          <Button size="sm" variant="danger" onClick={stopEmbeddings}>
             Ferma ({job.done}/{job.total})
           </Button>
         ) : (
@@ -300,6 +396,10 @@ export default function SettingsPage() {
         <MoodAiSettings />
       </Section>
 
+      <Section kicker="Mappa del gusto" title="Embedding e gruppi automatici">
+        <EmbeddingSettings />
+      </Section>
+
       <Section kicker="Fuso orario" title="Per ore e giorni locali">
         <Card className="flex flex-wrap items-center gap-3">
           <Clock size={16} className="text-text-faint" />
@@ -333,6 +433,21 @@ export default function SettingsPage() {
           <div className="flex flex-wrap gap-2">
             <Button onClick={() => file.current?.click()} disabled={!!busy}>
               {busy === 'import' ? <Spinner size={14} /> : <Upload size={14} />} Sostituisci con un nuovo export
+            </Button>
+            <Button
+              variant="ghost"
+              title="Mood, testi, tag e gruppi per brano, in JSON: serve a `npm run analysis` (ANALYSIS_META) per rigenerare i numeri fuori dal browser."
+              onClick={async () => {
+                const rows = await query(`SELECT * EXCLUDE (cover) FROM meta ORDER BY uri`);
+                const url = URL.createObjectURL(new Blob([JSON.stringify(rows)], { type: 'application/json' }));
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'ascolti-arricchimento.json';
+                a.click();
+                setTimeout(() => URL.revokeObjectURL(url), 5000);
+              }}
+            >
+              <Save size={14} /> Esporta arricchimento per l’analisi
             </Button>
             <input
               ref={file}

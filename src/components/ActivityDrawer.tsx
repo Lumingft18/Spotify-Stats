@@ -2,6 +2,7 @@ import { Pause, Play, X, CheckCircle2, AlertCircle } from 'lucide-react';
 import { useApp } from '../lib/store';
 import { runStep, stopStep, STEPS, type StepId } from '../enrichment/jobs';
 import { MOOD_AI_JOB, moodAiAvailable, startMoodAi, stopMoodAi } from '../enrichment/moodAi';
+import { EMBED_JOB, embeddingsAvailable, startEmbeddings, stopEmbeddings } from '../enrichment/embedAi';
 import { Button, cx, Meter } from './ui';
 import { fmtInt } from '../lib/format';
 
@@ -101,6 +102,17 @@ export function ActivityDrawer() {
                   variant="ghost"
                   disabled={j.status !== 'running' && !moodAiAvailable()}
                   onClick={() => (j.status === 'running' ? stopMoodAi() : void startMoodAi({ limit: settings.autoMoodAiLimit }).catch(() => undefined))}
+                >
+                  {j.status === 'running' ? <Pause size={14} /> : <Play size={14} />}
+                  {j.status === 'running' ? 'Ferma' : 'Riprendi'}
+                </Button>
+              )}
+              {j.id === EMBED_JOB && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={j.status !== 'running' && !embeddingsAvailable()}
+                  onClick={() => (j.status === 'running' ? stopEmbeddings() : void startEmbeddings(settings.autoEmbeddingsLimit))}
                 >
                   {j.status === 'running' ? <Pause size={14} /> : <Play size={14} />}
                   {j.status === 'running' ? 'Ferma' : 'Riprendi'}

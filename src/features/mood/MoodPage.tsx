@@ -1,14 +1,17 @@
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { Fragment, useCallback, useMemo, useState } from 'react';
 import { Orbit, Search, Sparkles, Wand2, RefreshCw, X } from 'lucide-react';
 import { useSql, useSqlOne, useAsync } from '../../data/useSql';
-import { useApp } from '../../lib/store';
+import { getApp, useApp, type MoodProvider } from '../../lib/store';
 import { fmtHours, fmtInt, fmtPct, fmtMonth } from '../../lib/format';
 import { getMood, MOODS, MOOD_CENTER, MOOD_HEX, MOOD_SQL, moodLabel } from '../../lib/mood';
 import { navigate, routes } from '../../lib/router';
 import { idb } from '../../lib/idb';
-import { buildIndex, computeLayout, DEFAULT_EMBED_MODEL, EMBED_MODELS, loadIndex, semanticSearch } from '../../ml/embeddings';
+import { computeLayout, DEFAULT_EMBED_MODEL, EMBED_MODELS, loadIndex, semanticSearch } from '../../ml/embeddings';
+import { EMBED_JOB, startEmbeddings, stopEmbeddings } from '../../enrichment/embedAi';
 import { runStep } from '../../enrichment/jobs';
 import { moodCandidates, type MoodRunReport } from '../../llm/mood';
+import { loadMoodBench, runMoodBench, type DimMetric } from '../../llm/moodBench';
+import { useSageAvailable } from '../../llm/sage';
 import { nameClustersWithLLM } from '../../llm/narrate';
 import { useLlmAvailable, estimateTokens } from '../../llm/client';
 import { Badge, Button, Card, ErrorNote, Meter, PageHeader, Section, Segmented, Skeleton, Spinner } from '../../components/ui';
@@ -35,12 +38,102 @@ interface MapRow {
   energy: number | null;
 }
 
+function BenchRow({ label, d, base, useful }: { label: string; d: DimMetric; base: number; useful: boolean }) {
+  return (
+    <tr className="border-t border-border">
+      <td className="py-1.5 pr-3 text-text-muted">{label}</td>
+      <td className="num py-1.5 pr-3">
+        {d.mae.toFixed(3)} <span className="text-text-faint">({d.maeCI[0].toFixed(3)}–{d.maeCI[1].toFixed(3)})</span>
+      </td>
+      <td className="num py-1.5 pr-3 text-text-faint">{base.toFixed(3)}</td>
+      <td className="num py-1.5 pr-3">
+        {d.r.toFixed(2)} <span className="text-text-faint">({d.rCI[0].toFixed(2)}–{d.rCI[1].toFixed(2)})</span>
+      </td>
+      <td className="num py-1.5 pr-3">{fmtPct(Math.max(0, d.skill))}</td>
+      <td className="py-1.5">{useful ? <Badge tone="good">valida</Badge> : <Badge>non supera la baseline</Badge>}</td>
+    </tr>
+  );
+}
+
+function MoodBenchCard() {
+  const epoch = useApp((s) => s.epoch);
+  const settings = useApp((s) => s.settings);
+  const bench = useAsync(loadMoodBench, [epoch]);
+  const sage = useSageAvailable();
+  const llmOn = useLlmAvailable();
+  const [busy, setBusy] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const run = async () => {
+    setErr(null);
+    const providers: MoodProvider[] = [...(llmOn ? (['openrouter'] as const) : []), ...(sage ? (['sage'] as const) : [])];
+    try {
+      await runMoodBench({ providers, onProgress: (l, d, t) => setBusy(`${l === 'sage' ? 'Sage' : 'OpenRouter'} ${d}/${t}`) });
+      useApp.getState().bump();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+  const b = bench.value;
+  return (
+    <div className="mt-3 rounded-xl border border-border p-3 text-xs">
+      <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
+        <div className="font-medium text-text">Benchmark dello stimatore</div>
+        <Button size="sm" variant="ghost" disabled={!!busy || (!llmOn && !sage)} onClick={() => void run()}>
+          {busy ? <Spinner size={12} /> : <RefreshCw size={12} />} {busy ?? 'Esegui benchmark'}
+        </Button>
+      </div>
+      <p className="text-text-faint">
+        Brani con valori misurati, di artisti mai usati come esempi, stimati alla cieca. Confronto con una costante (la media). Una dimensione è
+        “valida” solo se l’errore medio è sotto quello della costante e la correlazione è sopra zero, con intervallo di confidenza al 95%.
+        Le stime vengono scritte solo per le dimensioni valide.
+      </p>
+      {b && (
+        <div className="mt-2 overflow-x-auto">
+          <div className="mb-1 text-text-faint">
+            {fmtInt(b.nTest)} brani di prova · {fmtInt(b.nTestArtists)} artisti di prova / {fmtInt(b.nTrainArtists)} di esempio ·{' '}
+            {new Date(b.at).toLocaleDateString('it-IT')}
+          </div>
+          <table className="w-full text-left">
+            <thead className="text-text-faint">
+              <tr>
+                <th className="pr-3 font-normal">stimatore · dimensione</th>
+                <th className="pr-3 font-normal">errore medio (IC 95%)</th>
+                <th className="pr-3 font-normal">costante</th>
+                <th className="pr-3 font-normal">r (IC 95%)</th>
+                <th className="pr-3 font-normal">skill</th>
+                <th className="font-normal">esito</th>
+              </tr>
+            </thead>
+            <tbody>
+              {b.providers.map((p) => (
+                <Fragment key={p.provider}>
+                  <BenchRow label={`${p.provider === 'sage' ? 'Sage' : p.model} · valence`} d={p.valence} base={b.baseline.maeValence} useful={p.useful.valence} />
+                  <BenchRow label={`${p.provider === 'sage' ? 'Sage' : p.model} · energia`} d={p.energy} base={b.baseline.maeEnergy} useful={p.useful.energy} />
+                </Fragment>
+              ))}
+            </tbody>
+          </table>
+          {b.providers.map((p) => (
+            <div key={p.provider} className="mt-1 text-text-faint">
+              {p.provider === 'sage' ? 'Sage' : 'OpenRouter'}: la confidenza dichiarata {Math.abs(p.confidenceValidity) < 0.1 || !Number.isFinite(p.confidenceValidity) ? 'non predice' : p.confidenceValidity > 0 ? 'predice in parte' : 'è inversa rispetto a'} l’errore reale (r = {Number.isFinite(p.confidenceValidity) ? p.confidenceValidity.toFixed(2) : '—'}).
+              {p.provider === settings.moodProvider && ' ← stimatore in uso'}
+            </div>
+          ))}
+        </div>
+      )}
+      {err && <div className="mt-2"><ErrorNote>{err}</ErrorNote></div>}
+    </div>
+  );
+}
+
 function MoodStatus() {
-  const ai = useLlmAvailable();
+  const ai = useApp((s) => (s.settings.moodProvider === 'sage' ? s.settings.connections.sage && !!s.settings.sageKey : s.settings.connections.llm && !!s.settings.openrouterKey));
   const cov = useSqlOne<{ with_mood: number; total: number; reccobeats: number; llm: number; live: number; lyrics: number }>(`
     SELECT sum(minutes) FILTER (WHERE p.valence IS NOT NULL) AS with_mood, sum(minutes) AS total,
            count(DISTINCT p.uri) FILTER (WHERE m.mood_source = 'reccobeats') AS reccobeats,
-           count(DISTINCT p.uri) FILTER (WHERE m.mood_source = 'llm') AS llm,
+           count(DISTINCT p.uri) FILTER (WHERE m.mood_source IN ('llm', 'sage', 'llm_pending')) AS llm,
            count(DISTINCT p.uri) FILTER (WHERE m.mood_adj LIKE 'live:studio%') AS live,
            count(DISTINCT p.uri) FILTER (WHERE m.valence_lyrics IS NOT NULL) AS lyrics
     FROM p LEFT JOIN meta m USING (uri)`);
@@ -48,6 +141,7 @@ function MoodStatus() {
   const job = useApp((s) => s.jobs.audiofeatures);
   const aiJob = useApp((s) => s.jobs[MOOD_AI_JOB]);
   const autoMood = useApp((s) => s.settings.autoMoodAi);
+  const provider = useApp((s) => s.settings.moodProvider);
   const running = aiJob?.status === 'running';
   const [err, setErr] = useState<string | null>(null);
   const [limit, setLimit] = useState(400);
@@ -95,8 +189,10 @@ function MoodStatus() {
           <Sparkles size={15} className="text-[var(--accent)]" /> Stima AI per i brani senza audio features
         </div>
         <p className="text-text-muted">
-          Usa testo e generi del brano, calibrata su {fmtInt(c?.reccobeats ?? 0)} brani con valori misurati (esempi nel prompt). Ogni brano viene
-          stimato 2 volte: la differenza diventa la confidenza. {fmtInt(nCand)} brani hanno testo o tag disponibili.
+          Usa testo e generi del brano, calibrata su {fmtInt(c?.reccobeats ?? 0)} brani con valori misurati (esempi nel prompt). Prima di scrivere
+          qualcosa lo stimatore ({provider === 'sage' ? 'Levanto Sage' : 'LLM via OpenRouter'}) viene verificato sul benchmark qui sotto: se non
+          batte la media, le stime non vengono salvate. {fmtInt(nCand)} brani hanno testo o tag disponibili.
+          {report.value && ` Ultimo avvio: ${fmtInt(report.value.analyzed)} brani stimati.`}
         </p>
         <div className="mt-3 flex flex-wrap items-center gap-3">
           <label className="flex items-center gap-2 text-xs text-text-muted">
@@ -133,13 +229,7 @@ function MoodStatus() {
           )}
         </div>
         {err && <div className="mt-2"><ErrorNote>{err}</ErrorNote></div>}
-        {report.value?.calibration && (
-          <div className="mt-3 text-xs text-text-muted">
-            Ultima verifica su {report.value.calibration.n} brani misurati nascosti al modello: errore medio valence{' '}
-            <span className="num">{report.value.calibration.maeValence.toFixed(2)}</span> (r = <span className="num">{report.value.calibration.rValence.toFixed(2)}</span>), energia{' '}
-            <span className="num">{report.value.calibration.maeEnergy.toFixed(2)}</span> (r = <span className="num">{report.value.calibration.rEnergy.toFixed(2)}</span>).
-          </div>
-        )}
+        <MoodBenchCard />
       </div>
     </Card>
   );
@@ -155,15 +245,18 @@ function GalaxySection() {
   const clusters = useSql<{ id: number; label: string }>(`SELECT id, label FROM clusters ORDER BY id`);
   const periodUris = useSql<{ uri: string }>(`SELECT DISTINCT uri FROM p`);
   const [colorBy, setColorBy] = useState<'cluster' | 'mood'>('cluster');
-  const [n, setN] = useState(2500);
-  const [building, setBuilding] = useState<{ stage: string; done: number; total: number } | null>(null);
+  const update = useApp((s) => s.updateSettings);
+  const [n, setN] = useState(() => getApp().settings.autoEmbeddingsLimit);
+  const embJob = useApp((s) => s.jobs[EMBED_JOB]);
+  const [relaying, setBuilding] = useState<{ stage: string; done: number; total: number } | null>(null);
+  const building =
+    relaying ?? (embJob?.status === 'running' ? { stage: embJob.detail ?? 'Embedding', done: embJob.done, total: embJob.total } : null);
   const [err, setErr] = useState<string | null>(null);
   const [q, setQ] = useState('');
   const [hits, setHits] = useState<Array<{ uri: string; score: number }> | null>(null);
   const [selection, setSelection] = useState<string[] | null>(null);
   const [focusCluster, setFocusCluster] = useState<number | null>(null);
   const [naming, setNaming] = useState(false);
-  const ctrl = useRef<AbortController | null>(null);
 
   const inPeriod = useMemo(() => new Set((periodUris.data ?? []).map((r) => r.uri)), [periodUris.data]);
   const hitSet = useMemo(() => (hits ? new Set(hits.slice(0, 40).map((h) => h.uri)) : null), [hits]);
@@ -210,15 +303,10 @@ function GalaxySection() {
 
   const build = async () => {
     setErr(null);
-    ctrl.current = new AbortController();
-    try {
-      setBuilding({ stage: 'Avvio', done: 0, total: 1 });
-      await buildIndex(DEFAULT_EMBED_MODEL, n, (stage, done, total) => setBuilding({ stage, done, total }), ctrl.current.signal);
-    } catch (e) {
-      if (!ctrl.current.signal.aborted) setErr(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBuilding(null);
-    }
+    update({ autoEmbeddingsLimit: n });
+    await startEmbeddings(n);
+    const j = getApp().jobs[EMBED_JOB];
+    if (j?.status === 'error') setErr(j.detail ?? 'Errore');
   };
 
   const relayout = async () => {
@@ -303,7 +391,7 @@ function GalaxySection() {
           {building.total > 1 && <Meter value={building.done} max={building.total} />}
           <div className="mt-1 text-xs text-text-faint">Gli embedding arrivano da OpenRouter a blocchi da 96 brani.</div>
         </div>
-        <Button size="sm" variant="ghost" onClick={() => ctrl.current?.abort()}>
+        <Button size="sm" variant="ghost" onClick={stopEmbeddings}>
           Annulla
         </Button>
       </Card>
@@ -319,7 +407,7 @@ function GalaxySection() {
             <div className="text-sm">{building.stage}</div>
             {building.total > 1 && <Meter value={building.done} max={building.total} />}
           </div>
-          <Button size="sm" variant="ghost" onClick={() => ctrl.current?.abort()}>
+          <Button size="sm" variant="ghost" onClick={stopEmbeddings}>
             Annulla
           </Button>
         </Card>

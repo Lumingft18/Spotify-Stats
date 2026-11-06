@@ -1,13 +1,17 @@
-// Mood v2: valence/energy from lyrics + tags with few-shot anchors (measured values), self-consistency confidence
-// and a hold-out calibration against tracks whose audio features are known.
+// Mood estimation for tracks without measured audio features.
+// Two interchangeable estimators: an LLM via OpenRouter (few-shot anchors, JSON schema) and Levanto Sage
+// (scale decisions). Neither is trusted by default: llm/moodBench.ts measures both against held-out
+// measured tracks, and estimates are written only when the benchmark says they beat a constant guess.
 import { query, upsertMeta } from '../data/db';
 import type { MetaRow } from '../data/schema';
 import { idb } from '../lib/idb';
-import { getApp } from '../lib/store';
+import { getApp, type MoodProvider } from '../lib/store';
 import { structured } from './client';
 import { MOOD_CENTER } from '../lib/mood';
+import { sageMoodBatch } from './sage';
+import type { MoodBench } from './moodBench';
 
-interface Item {
+export interface Item {
   uri: string;
   track: string;
   artist: string;
@@ -17,10 +21,17 @@ interface Item {
   energy?: number;
 }
 
+export interface Estimate {
+  valence: number | null;
+  energy: number | null;
+  /** Provider-side agreement/confidence (0–1). Not accuracy: accuracy comes from the benchmark. */
+  agreement: number;
+}
+
 export interface MoodRunReport {
   analyzed: number;
   anchors: number;
-  calibration: { n: number; maeValence: number; maeEnergy: number; rValence: number; rEnergy: number } | null;
+  provider: MoodProvider;
   at: number;
 }
 
@@ -46,16 +57,18 @@ const SCHEMA = {
   },
 };
 
-const SYSTEM = `Sei un esperto di Music Emotion Recognition. Per ogni brano stimi due valori continui da 0 a 1:
-- valence: positività emotiva percepita (0 = cupo/triste/rabbioso, 1 = gioioso/euforico/sereno). Usa soprattutto il TESTO e il tono.
-- energy: intensità/arousal percepita (0 = calmo, acustico, lento; 1 = intenso, veloce, forte). Usa soprattutto GENERI/TAG e lo stile dell'artista.
-Calibra le stime sui BRANI DI RIFERIMENTO forniti: i loro valori sono misurati sull'audio e definiscono la scala.
-Valori tipici della scala: valence ≈ 0.50, energy ≈ 0.65 (la musica pubblicata è in media piuttosto energica). Se le informazioni sono scarse, resta vicino a questi valori tipici invece di inventare. "evidence" = max 12 parole sul perché.
-Rispondi solo con il JSON richiesto, con un elemento per ogni id ricevuto.`;
+// No "stay near typical values" instruction: it shrank every estimate towards the mean, which looked
+// cautious but destroyed the signal (measured r ≈ 0 on held-out tracks).
+const SYSTEM = `Sei un esperto di Music Emotion Recognition. Per ogni brano stimi due valori continui da 0 a 1, sulla stessa scala delle audio features di Spotify:
+- valence: positività emotiva percepita della MUSICA e del testo (0 = cupo/triste/rabbioso, 1 = gioioso/euforico/sereno).
+- energy: intensità/arousal percepita (0 = calmo, acustico, lento; 1 = intenso, veloce, forte).
+Se conosci il brano, usa ciò che sai di come SUONA (tempo, arrangiamento, tonalità), non solo il testo.
+Calibra le stime sui BRANI DI RIFERIMENTO forniti: i loro valori sono misurati sull'audio e definiscono la scala. Usa tutta la scala quando il brano lo giustifica.
+"evidence" = max 12 parole sul perché. Rispondi solo con il JSON richiesto, con un elemento per ogni id ricevuto.`;
 
-const clip = (s: string | null, n: number) => (s ? s.replace(/\s+/g, ' ').slice(0, n) : '');
+export const clip = (s: string | null, n: number) => (s ? s.replace(/\s+/g, ' ').slice(0, n) : '');
 
-function describe(i: Item, withLyrics = 380) {
+export function describe(i: Item, withLyrics = 380) {
   const bits = [`"${i.track}" — ${i.artist}`];
   if (i.tags) bits.push(`tag: ${i.tags}`);
   if (i.lyrics === '[strumentale]') bits.push('strumentale');
@@ -63,7 +76,7 @@ function describe(i: Item, withLyrics = 380) {
   return bits.join(' | ');
 }
 
-function pickAnchors(pool: Item[], n: number): Item[] {
+export function pickAnchors(pool: Item[], n: number): Item[] {
   // Stratify on the 4 quadrants, prefer anchors with textual signal.
   const q = (i: Item) => (i.valence! > MOOD_CENTER.valence ? 1 : 0) + (i.energy! > MOOD_CENTER.energy ? 2 : 0);
   const buckets: Item[][] = [[], [], [], []];
@@ -77,132 +90,159 @@ function pickAnchors(pool: Item[], n: number): Item[] {
   return out;
 }
 
-function pearson(a: number[], b: number[]) {
-  const n = a.length;
-  const ma = a.reduce((x, y) => x + y, 0) / n;
-  const mb = b.reduce((x, y) => x + y, 0) / n;
-  let num = 0;
-  let da = 0;
-  let db = 0;
-  for (let i = 0; i < n; i++) {
-    num += (a[i] - ma) * (b[i] - mb);
-    da += (a[i] - ma) ** 2;
-    db += (b[i] - mb) ** 2;
-  }
-  return num / Math.sqrt(da * db || 1);
+export const anchorLines = (anchors: Item[]) =>
+  anchors.map((a) => `- ${describe(a, 160)} ⇒ valence ${a.valence!.toFixed(2)}, energy ${a.energy!.toFixed(2)}`).join('\n');
+
+/** Tracks with measured (audio) valence/energy: anchors for the estimators and ground truth for the benchmark. */
+export async function measuredTracks(limit = 5000): Promise<Item[]> {
+  return query<Item>(
+    `SELECT t.uri, t.track, t.artist, m.tags, m.lyrics, coalesce(m.valence_audio, m.valence) AS valence, coalesce(m.energy_audio, m.energy) AS energy
+     FROM tracks t JOIN meta m USING (uri)
+     WHERE m.mood_source = 'reccobeats' AND m.valence IS NOT NULL AND m.energy IS NOT NULL ORDER BY t.minutes DESC LIMIT ${Math.floor(limit)}`,
+  );
+}
+
+/** Runs one estimator over `items` in batches. Returns uri → estimate. */
+export async function estimateMood(
+  provider: MoodProvider,
+  items: Item[],
+  anchors: Item[],
+  opts: { samples?: number; signal?: AbortSignal; onProgress?: (done: number, total: number) => void; onBatch?: (b: Map<string, Estimate>) => Promise<void> },
+): Promise<Map<string, Estimate>> {
+  const out = new Map<string, Estimate>();
+  const B = provider === 'sage' ? 20 : 12;
+  const batches: Item[][] = [];
+  for (let i = 0; i < items.length; i += B) batches.push(items.slice(i, i + B));
+  const anchorText = anchors.length ? anchorLines(anchors) : '(nessun riferimento misurato disponibile)';
+  const sageRef = anchorLines(anchors.slice(0, 12));
+  const samples = provider === 'sage' ? 1 : Math.max(1, opts.samples ?? 1);
+  const model = getApp().settings.llmModelBulk;
+  let cursor = 0;
+  let done = 0;
+  opts.onProgress?.(0, items.length);
+
+  const runBatch = async (batch: Item[]): Promise<Map<string, Estimate>> => {
+    const res = new Map<string, Estimate>();
+    if (provider === 'sage') {
+      const r = await sageMoodBatch(batch.map((t) => describe(t)), sageRef, opts.signal);
+      batch.forEach((t, i) => res.set(t.uri, { valence: r[i].valence, energy: r[i].energy, agreement: r[i].confidence }));
+      return res;
+    }
+    const ids = new Map(batch.map((t, i) => [`t${i}`, t]));
+    const user = `BRANI DI RIFERIMENTO (valori misurati):\n${anchorText}\n\nBRANI DA STIMARE:\n${batch.map((t, i) => `[t${i}] ${describe(t)}`).join('\n')}`;
+    const acc = new Map<string, { v: number[]; e: number[] }>();
+    for (let s = 0; s < samples; s++) {
+      const r = await structured<{ results: Array<{ id: string; valence: number; energy: number }> }>({
+        model,
+        system: SYSTEM,
+        user,
+        schemaName: 'mood_estimates',
+        schema: SCHEMA,
+        temperature: samples > 1 ? 0.7 : 0.2,
+        signal: opts.signal,
+      });
+      for (const x of r.results ?? []) {
+        const t = ids.get(x.id);
+        if (!t || !Number.isFinite(Number(x.valence)) || !Number.isFinite(Number(x.energy))) continue;
+        const p = acc.get(t.uri) ?? { v: [], e: [] };
+        p.v.push(Math.min(1, Math.max(0, Number(x.valence))));
+        p.e.push(Math.min(1, Math.max(0, Number(x.energy))));
+        acc.set(t.uri, p);
+      }
+    }
+    const avg = (a: number[]) => a.reduce((x, y) => x + y, 0) / a.length;
+    for (const [uri, p] of acc) {
+      const spread = p.v.length > 1 ? (Math.max(...p.v) - Math.min(...p.v) + Math.max(...p.e) - Math.min(...p.e)) / 2 : 0.25;
+      res.set(uri, { valence: avg(p.v), energy: avg(p.e), agreement: Math.max(0, 1 - spread * 2) });
+    }
+    return res;
+  };
+
+  const worker = async () => {
+    while (cursor < batches.length && !opts.signal?.aborted) {
+      const batch = batches[cursor++];
+      let res: Map<string, Estimate> | null = null;
+      for (let attempt = 0; attempt < 3 && !res && !opts.signal?.aborted; attempt++) {
+        try {
+          res = await runBatch(batch);
+        } catch (e) {
+          if (opts.signal?.aborted) return;
+          console.warn(`mood batch failed (${provider})`, e);
+          await new Promise((r) => setTimeout(r, 1500 * 2 ** attempt));
+        }
+      }
+      if (res) {
+        for (const [k, v] of res) out.set(k, v);
+        await opts.onBatch?.(res);
+      }
+      done += batch.length;
+      opts.onProgress?.(done, items.length);
+    }
+  };
+  await Promise.all([worker(), worker(), worker()]);
+  return out;
 }
 
 export async function moodCandidates(limit: number) {
   return query<Item>(
     `SELECT t.uri, t.track, t.artist, m.tags, m.lyrics FROM tracks t LEFT JOIN meta m USING (uri)
-     WHERE (m.mood_source IS NULL OR m.mood_source = 'llm_pending') AND t.plays > 0
+     WHERE (m.mood_source IS NULL OR m.mood_source IN ('llm_pending', 'llm_rejected')) AND t.plays > 0
        AND ((m.lyrics IS NOT NULL AND m.lyrics <> '') OR (m.tags IS NOT NULL AND m.tags <> ''))
      ORDER BY t.minutes DESC LIMIT ${Math.floor(limit)}`,
   );
 }
 
+/**
+ * Estimates mood for tracks without audio features, writing only the dimensions the benchmark validated.
+ * mood_conf = benchmark skill on valence (share of the constant baseline's error removed) × provider agreement.
+ */
 export async function runMoodV2(opts: {
   limit: number;
   samples: 1 | 2 | 3;
+  bench: MoodBench;
   onProgress: (done: number, total: number) => void;
   signal: AbortSignal;
 }): Promise<MoodRunReport> {
-  const model = getApp().settings.llmModelBulk;
-  const known = await query<Item>(
-    // Anchors/hold-out use the raw measured audio values, not the lyric-fused ones.
-    `SELECT t.uri, t.track, t.artist, m.tags, m.lyrics, coalesce(m.valence_audio, m.valence) AS valence, coalesce(m.energy_audio, m.energy) AS energy
-     FROM tracks t JOIN meta m USING (uri)
-     WHERE m.mood_source = 'reccobeats' AND m.valence IS NOT NULL AND m.energy IS NOT NULL ORDER BY t.minutes DESC LIMIT 400`,
-  );
-  // Hold-out: 12 known tracks are predicted blind to measure accuracy.
-  const holdout = known.filter((k) => k.lyrics || k.tags).slice(0, 12);
-  const holdSet = new Set(holdout.map((h) => h.uri));
-  const anchors = pickAnchors(
-    known.filter((k) => !holdSet.has(k.uri)),
-    40,
-  );
-  const anchorText = anchors.length
-    ? anchors.map((a) => `- ${describe(a, 160)} ⇒ valence ${a.valence!.toFixed(2)}, energy ${a.energy!.toFixed(2)}`).join('\n')
-    : '(nessun riferimento misurato disponibile: usa la tua conoscenza e resta prudente)';
-
-  const targets = [...holdout, ...(await moodCandidates(opts.limit))];
-  const B = 12;
-  const preds = new Map<string, { v: number[]; e: number[] }>();
-  let done = 0;
-  const total = targets.length;
-  opts.onProgress(0, total);
-
-  const batches: Item[][] = [];
-  for (let i = 0; i < targets.length; i += B) batches.push(targets.slice(i, i + B));
-
-  let cursor = 0;
-  const worker = async () => {
-    while (cursor < batches.length && !opts.signal.aborted) {
-      const batch = batches[cursor++];
-      const ids = new Map(batch.map((t, i) => [`t${i}`, t]));
-      const user = `BRANI DI RIFERIMENTO (valori misurati):\n${anchorText}\n\nBRANI DA STIMARE:\n${batch
-        .map((t, i) => `[t${i}] ${describe(t)}`)
-        .join('\n')}`;
-      for (let s = 0; s < opts.samples; s++) {
-        try {
-          const r = await structured<{ results: Array<{ id: string; valence: number; energy: number }> }>({
-            model,
-            system: SYSTEM,
-            user,
-            schemaName: 'mood_estimates',
-            schema: SCHEMA,
-            temperature: opts.samples > 1 ? 0.7 : 0.2,
-            signal: opts.signal,
-          });
-          for (const x of r.results ?? []) {
-            const t = ids.get(x.id);
-            if (!t) continue;
-            const p = preds.get(t.uri) ?? { v: [], e: [] };
-            p.v.push(Math.min(1, Math.max(0, Number(x.valence))));
-            p.e.push(Math.min(1, Math.max(0, Number(x.energy))));
-            preds.set(t.uri, p);
-          }
-        } catch (e) {
-          if (opts.signal.aborted) return;
-          console.warn('mood batch failed', e);
-        }
-      }
-      done += batch.length;
-      opts.onProgress(done, total);
-      // Persist progressively (non-holdout only).
+  const provider = getApp().settings.moodProvider;
+  const pr = opts.bench.providers.find((p) => p.provider === provider);
+  if (!pr?.useful.valence) throw new Error('Il benchmark non ha validato questo stimatore: nessuna stima scritta.');
+  const anchors = pickAnchors(await measuredTracks(400), 40);
+  const targets = await moodCandidates(opts.limit);
+  const skill = Math.max(0, Math.min(1, pr.valence.skill));
+  let analyzed = 0;
+  await estimateMood(provider, targets, anchors, {
+    samples: opts.samples,
+    signal: opts.signal,
+    onProgress: opts.onProgress,
+    onBatch: async (res) => {
       const rows: MetaRow[] = [];
-      for (const t of batch) {
-        if (holdSet.has(t.uri)) continue;
-        const p = preds.get(t.uri);
-        if (!p?.v.length) continue;
-        const mean = (a: number[]) => a.reduce((x, y) => x + y, 0) / a.length;
-        const spread = p.v.length > 1 ? (Math.max(...p.v) - Math.min(...p.v) + Math.max(...p.e) - Math.min(...p.e)) / 2 : 0.25;
-        rows.push({ uri: t.uri, valence: mean(p.v), energy: mean(p.e), mood_source: 'llm', mood_conf: Math.max(0, 1 - spread * 2) });
+      for (const [uri, e] of res) {
+        if (e.valence == null) continue;
+        rows.push({
+          uri,
+          valence: e.valence,
+          energy: pr.useful.energy ? e.energy : null,
+          mood_source: provider === 'sage' ? 'sage' : 'llm',
+          mood_conf: skill * (0.5 + 0.5 * e.agreement),
+        });
       }
+      analyzed += rows.length;
       if (rows.length) await upsertMeta(rows);
-    }
-  };
-  await Promise.all([worker(), worker(), worker()]);
-
-  let calibration: MoodRunReport['calibration'] = null;
-  const hv = holdout.filter((h) => preds.get(h.uri)?.v.length);
-  if (hv.length >= 6) {
-    const pv = hv.map((h) => preds.get(h.uri)!.v.reduce((a, b) => a + b, 0) / preds.get(h.uri)!.v.length);
-    const pe = hv.map((h) => preds.get(h.uri)!.e.reduce((a, b) => a + b, 0) / preds.get(h.uri)!.e.length);
-    const tv = hv.map((h) => h.valence!);
-    const te = hv.map((h) => h.energy!);
-    calibration = {
-      n: hv.length,
-      maeValence: pv.reduce((s, v, i) => s + Math.abs(v - tv[i]), 0) / hv.length,
-      maeEnergy: pe.reduce((s, v, i) => s + Math.abs(v - te[i]), 0) / hv.length,
-      rValence: pearson(pv, tv),
-      rEnergy: pearson(pe, te),
-    };
-  }
-  const report: MoodRunReport = { analyzed: Math.max(0, done - holdout.length), anchors: anchors.length, calibration, at: Date.now() };
+    },
+  });
+  const report: MoodRunReport = { analyzed, anchors: anchors.length, provider, at: Date.now() };
   await idb.set('mood_report', report);
   getApp().bump();
   return report;
+}
+
+/** Withdraws AI estimates that failed the benchmark: values cleared, tracks can be re-estimated by a better provider. */
+export async function rejectAiEstimates(source: 'llm' | 'sage'): Promise<number> {
+  const [{ n }] = await query<{ n: number }>(`SELECT count(*)::INT AS n FROM meta WHERE mood_source = '${source}'`);
+  if (!n) return 0;
+  const rows = await query<{ uri: string }>(`SELECT uri FROM meta WHERE mood_source = '${source}'`);
+  await upsertMeta(rows.map((r) => ({ uri: r.uri, valence: null, energy: null, mood_conf: null, mood_source: 'llm_rejected' })));
+  return n;
 }
 
 // ---------- Lyrics-only valence (fused with audio valence in data/moodAdjust.ts) ----------

@@ -9,7 +9,8 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "test": "vitest run",
-    "typecheck": "tsc -p tsconfig.app.json --noEmit"
+    "typecheck": "tsc -p tsconfig.app.json --noEmit",
+    "analysis": "vitest run test/report.test.ts"
   },
   "dependencies": {
     "@duckdb/duckdb-wasm": "1.32.0",

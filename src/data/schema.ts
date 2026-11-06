@@ -21,6 +21,9 @@ WITH base AS (
     shuffle, skipped, offline, incognito
   FROM plays_raw
   WHERE coalesce(track_uri, 'local:' || artist || ' — ' || track) NOT IN (SELECT uri FROM excluded)
+  -- Cleaning rule: one play per (start time, track). Exports repeat some plays with a different
+  -- ms_played (e.g. offline sync); the longest one is kept.
+  QUALIFY row_number() OVER (PARTITION BY ts, uri ORDER BY ms_played DESC) = 1
 ),
 gaps AS (
   SELECT *,
@@ -45,6 +48,9 @@ CREATE OR REPLACE TABLE plays_seq AS
 SELECT id, session_id,
   row_number() OVER (PARTITION BY session_id ORDER BY ts) AS pos_in_session,
   lag(uri) OVER (PARTITION BY session_id ORDER BY ts)     AS prev_uri,
+  -- Previous track ended with the forward button: the one skip signal recorded the same way in every year
+  -- (the explicit "skipped" flag only appears in exports from 2022 on).
+  lag(reason_end = 'avanti') OVER (PARTITION BY session_id ORDER BY ts) AS prev_skipped,
   date_diff('day', lag(day) OVER (PARTITION BY uri ORDER BY ts), day) AS days_since_last
 FROM plays;
 

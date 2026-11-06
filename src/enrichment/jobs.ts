@@ -5,6 +5,7 @@ import { getApp, type ConnectionId } from '../lib/store';
 import { sleep } from './net';
 import { cacheCatalog } from '../lib/catalogCache';
 import { autoMoodAi, stopMoodAi } from './moodAi';
+import { autoEmbeddings, stopEmbeddings } from './embedAi';
 import { isEnrichmentHeld } from './pause';
 import { applyMoodAdjustments } from '../data/moodAdjust';
 import { fetchArtistTagsMB, fetchAudioFeatures, fetchCover, fetchLyrics, fetchTags, type TrackRef } from './providers';
@@ -137,6 +138,7 @@ export function stopStep(step: StepId) {
 export function stopAll() {
   for (const c of controllers.values()) c.abort();
   stopMoodAi();
+  stopEmbeddings();
 }
 
 export async function pendingCount(step: StepId): Promise<number> {
@@ -296,7 +298,8 @@ function runAllEnabledNow() {
   if (s.connections.lyrics) runs.push(runStep('lyrics', 1500));
   if (s.connections.lastfm) runs.push(runStep('tags', s.lastfmKey ? 3000 : 600));
   // …and runs again once this session's lyrics/tags are in, to cover the new candidates.
-  void Promise.all(runs).then(autoMoodAi);
+  // The taste map waits for lyrics/tags too: richer documents give better embeddings.
+  void Promise.all(runs).then(() => Promise.all([autoMoodAi(), autoEmbeddings()]));
 }
 
 export async function resetTried() {

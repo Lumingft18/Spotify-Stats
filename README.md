@@ -7,8 +7,8 @@ Analisi del tuo storico Spotify **interamente nel browser**: statistiche, ere mu
 - **Panoramica** — ore, ascolti (≥ 30 s), confronto con il periodo precedente, insight automatici, ere, top con copertine.
 - **Esplora** — artisti, brani e album con filtri; pagine dedicate per ogni entità (andamento, orari, mood, simili).
 - **Tempo** — heatmap ora × giorno, calendario annuale, sessioni (tipologie), salti, dispositivi, paesi.
-- **Mood & Galassia** — valence/energia misurate (ReccoBeats) o stimate dall'AI su testo e tag con anchor few-shot e confidenza; mappa UMAP degli embedding (EmbeddingGemma 2 via transformers.js/WebGPU), cluster, ricerca semantica, selezione a lazo.
-- **Modelli** — predizione degli skip (regressione logistica, validazione temporale, importanza per permutazione), ere (segmentazione binaria), ciclo di vita degli artisti (Kaplan–Meier), riscoperta (Thompson sampling).
+- **Mood & Galassia** — valence/energia misurate (ReccoBeats) o stimate da LLM (OpenRouter) o da Levanto Sage su testo e tag, **solo se lo stimatore supera il benchmark**; mappa UMAP degli embedding (Gemini Embedding 2 via OpenRouter), creata in automatico quando c'è la chiave (disattivabile), cluster, ricerca semantica, selezione a lazo.
+- **Modelli** — predizione degli skip (regressione logistica, validazione temporale, baseline, IC bootstrap), ere (segmentazione binaria a penalità relativa), ciclo di vita degli artisti (Kaplan–Meier con troncamento a sinistra), riscoperta (Thompson sampling), sezione **Affidabilità** (pulizia dati, sensibilità alle soglie).
 - **Chiedi** — agente con tool (`run_sql` di sola lettura, ricerca semantica, grafici, liste brani); ogni query è ispezionabile.
 - **Racconto** — story mode annuale scorrevole, didascalie opzionali via AI, immagine 9:16 da condividere.
 - **Confronta** — compatibilità con amici (salva solo aggregati).
@@ -16,7 +16,7 @@ Analisi del tuo storico Spotify **interamente nel browser**: statistiche, ere mu
 
 ## Privacy
 
-Nessun backend. I dati restano in IndexedDB. Servizi esterni solo se attivati: `open.spotify.com` (oEmbed copertine), `api.reccobeats.com` (audio features), `lrclib.net` (testi), `ws.audioscrobbler.com` (tag, con tua chiave), `huggingface.co` (download modello), `openrouter.ai` (AI, con tua chiave).
+Nessun backend. I dati restano in IndexedDB. Servizi esterni solo se attivati: `open.spotify.com` (oEmbed copertine), `api.reccobeats.com` (audio features), `lrclib.net` (testi), `ws.audioscrobbler.com` (tag, con tua chiave), `openrouter.ai` (AI, con tua chiave), `sage.levanto.ai` (Sage, con tua chiave).
 
 ## Stack
 
@@ -37,6 +37,25 @@ npm test                                   # unit test
 SPOTIFY_TEST_ZIP=/percorso/export.zip npm test   # + test SQL su un export reale (DuckDB nativo)
 npm run build
 ```
+
+## Metodi e riproducibilità
+
+Ogni numero della sezione Modelli si rigenera da un export, con seed fissi, su DuckDB nativo:
+
+```bash
+ANALYSIS_ZIP=/percorso/export.zip npm run analysis          # → analysis-out/report.md + report.json
+ANALYSIS_META=/percorso/arricchimento.json …                # + mood, testi, tag (opzionale)
+ANALYSIS_BENCH=1 …                                          # + benchmark del mood (usa le chiavi di .env.local)
+```
+
+Regole e scelte, tutte nel codice e mostrate in app:
+
+- **Pulizia**: un ascolto per (istante di inizio, brano), tenuto il più lungo; “ascolto” = ≥ 30 s; brani esclusi dall'utente rimossi ovunque.
+- **Salto** (modello): brano chiuso con il tasto avanti. Il campo `skipped` esplicito esiste solo negli export dal 2022, quindi non è usato come etichetta: cambierebbe significato a metà serie.
+- **Skip**: split temporale 80/20, standardizzazione sul solo training, confronto con un modello “slancio” (solo il salto precedente) e uno “solo brano”; AUC con IC bootstrap al 95%; importanza = calo medio di AUC su 8 permutazioni ± sd; mood mancante con indicatore dedicato.
+- **Mood AI**: benchmark su ≤ 300 brani misurati di artisti mai usati come esempio (split per artista), confronto con una costante; una dimensione è scritta solo se l'IC dell'errore è sotto la costante e l'IC di r è sopra 0. Nessuna stima viene presentata come misura.
+- **Ere**: segmentazione binaria su vettori di quote per artista (Hellinger); un taglio resta solo se spiega ≥ 4% della varianza totale.
+- **Ciclo di vita**: Kaplan–Meier, censura per gli artisti attivi, esclusi gli artisti già ascoltati all'inizio dei dati; mediana riportata per soglie 30/60/90/180 giorni.
 
 Piano e motivazioni: [PIANO_EVOLUZIONE_2026.md](PIANO_EVOLUZIONE_2026.md).
 

@@ -17,6 +17,7 @@ export default defineConfig(({ command, mode }) => {
       ? {
           openrouterKey: fileEnv.OPENROUTER_API_KEY || env.OPENROUTER_API_KEY || '',
           lastfmKey: fileEnv.LASTFM_API_KEY || env.LASTFM_API_KEY || '',
+          sageKey: fileEnv.SAGE_API_KEY || env.SAGE_API_KEY || '',
           llmModelBulk: fileEnv.LLM_MODEL_BULK || env.LLM_MODEL_BULK || '',
           llmModelAgent: fileEnv.LLM_MODEL_AGENT || env.LLM_MODEL_AGENT || '',
           lrclibAppId: fileEnv.LRCLIB_APP_ID || env.LRCLIB_APP_ID || '',

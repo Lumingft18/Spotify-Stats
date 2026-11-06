@@ -32,3 +32,6 @@ StreamingHistory*.json
 .env
 .env.*
 !.env.example
+
+# Reproducible analysis output (personal data)
+analysis-out/
