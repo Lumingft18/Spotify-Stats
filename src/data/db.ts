@@ -274,6 +274,31 @@ export async function loadScratchPlays(cols: PlayColumns, name: string): Promise
   await insertArrow(playsTable(cols), name);
 }
 
+/** Raw plays as Arrow IPC (the format saved for every analysis). */
+export function playsIpc(cols: PlayColumns): Uint8Array {
+  if (PLAY_COLUMNS.some((k) => !Array.isArray(cols[k]))) throw new Error('Colonne non valide');
+  return tableToIPC(playsTable(cols), 'stream');
+}
+
+/** Loads a saved Arrow IPC blob (another analysis' plays or meta) into a scratch table. */
+export async function loadIpcTable(ipc: Uint8Array, name: string): Promise<void> {
+  if (!/^[a-z_]+$/.test(name)) throw new Error('nome tabella non valido');
+  await insertArrow(tableFromIPC(ipc), name);
+}
+
+/** Loads plain rows into a scratch table (all columns as text/number). */
+export async function loadRowsTable(rows: Array<Record<string, string | number | null>>, cols: string[], name: string): Promise<void> {
+  if (!/^[a-z_]+$/.test(name)) throw new Error('nome tabella non valido');
+  const data: Record<string, unknown> = {};
+  for (const c of cols) {
+    const vals = rows.map((r) => r[c] ?? null);
+    data[c] = vals.some((v) => typeof v === 'number')
+      ? vectorFromArray(vals.map((v) => (typeof v === 'number' ? v : null)), new Float64())
+      : vectorFromArray(vals.map((v) => (v == null ? null : String(v))), new Utf8());
+  }
+  await insertArrow(tableFromArrays(data as never) as unknown as Table, name);
+}
+
 /** Warm the engine early (downloads wasm while the user reads the landing page). */
 export function prewarm() {
   void getConn();

@@ -17,6 +17,20 @@ const need = (): string => {
 };
 const enc = encodeURIComponent;
 
+/** Read/write another saved analysis (e.g. a friend's, for comparisons) without opening it. */
+export function kvFor(id: string) {
+  const b = `/analyses/${encodeURIComponent(id)}`;
+  return {
+    async get<T>(key: string, store: StoreName = 'kv'): Promise<T | undefined> {
+      const bytes = await apiBytes(`${b}/kv/${store}/${enc(key)}`);
+      return bytes ? unpack<T>(bytes) : undefined;
+    },
+    async setMany(entries: Array<[string, unknown]>, store: StoreName = 'kv'): Promise<void> {
+      await apiBytes(`${b}/kv-batch`, 'POST', pack({ entries: entries.map(([k, v]) => [store, k, pack(v)]) }));
+    },
+  };
+}
+
 export const kv = {
   async get<T>(key: string, store: StoreName = 'kv'): Promise<T | undefined> {
     const b = base();
