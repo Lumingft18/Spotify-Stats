@@ -15,9 +15,11 @@ interface Slot<V> {
 }
 
 /** Runs a query and re-runs it whenever the global epoch (filter/meta changes) or params change.
- *  Previous data stays visible while the next result loads (no flashing skeletons). */
-export function useSql<T = Record<string, unknown>>(sql: string | null, params: unknown[] = []): SqlState<T> {
-  const epoch = useApp((s) => s.epoch);
+ *  Previous data stays visible while the next result loads (no flashing skeletons).
+ *  `opts.key` replaces the epoch as the refresh trigger (for heavy views that must not redraw on every enrichment tick). */
+export function useSql<T = Record<string, unknown>>(sql: string | null, params: unknown[] = [], opts: { key?: string | null } = {}): SqlState<T> {
+  const globalEpoch = useApp((s) => s.epoch);
+  const epoch = opts.key ?? globalEpoch;
   const ready = useApp((s) => s.status === 'ready');
   const paramKey = JSON.stringify(params);
   const reqKey = `${epoch}|${sql}|${paramKey}`;
@@ -53,8 +55,9 @@ export function useSqlOne<T = Record<string, unknown>>(sql: string | null, param
 }
 
 /** Runs an async computation tied to the data epoch (re-runs on filter/meta changes or when deps change). */
-export function useAsync<T>(fn: () => Promise<T>, deps: unknown[] = []): SqlState<T> & { value: T | null } {
-  const epoch = useApp((s) => s.epoch);
+export function useAsync<T>(fn: () => Promise<T>, deps: unknown[] = [], opts: { key?: string | null } = {}): SqlState<T> & { value: T | null } {
+  const globalEpoch = useApp((s) => s.epoch);
+  const epoch = opts.key ?? globalEpoch;
   const ready = useApp((s) => s.status === 'ready');
   const reqKey = `${epoch}|${JSON.stringify(deps)}`;
   const [slot, setSlot] = useState<Slot<T>>({ key: '', value: null, error: null });

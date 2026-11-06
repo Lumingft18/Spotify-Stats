@@ -225,15 +225,36 @@ function MoodStatus() {
   );
 }
 
+/** Short hash for refresh keys (useSql keys must not contain '|'). */
+function keyHash(s: string): string {
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619);
+  return (h >>> 0).toString(36);
+}
+
 function GalaxySection() {
   const ai = useLlmAvailable();
-  const epoch = useApp((s) => s.epoch);
-  const index = useAsync(loadIndex, [epoch]);
-  const rows = useSql<MapRow>(`
-    SELECT t.uri, t.track, t.artist, m.x, m.y, m.cluster, t.minutes, m.valence, m.energy
-    FROM tracks t JOIN meta m USING (uri) WHERE m.x IS NOT NULL`);
-  const clusters = useSql<{ id: number; label: string }>(`SELECT id, label FROM clusters ORDER BY id`);
-  const periodUris = useSql<{ uri: string }>(`SELECT DISTINCT uri FROM p`);
+  // The map redraws only when ITS data changes (coordinates, groups, mood colors, period) — not on every
+  // enrichment tick (covers/lyrics/tags bump the global epoch every few seconds).
+  const sig = useSqlOne<Record<string, unknown>>(`
+    SELECT count(x) AS n, round(sum(x), 3) AS sx, count(valence) AS nv, round(sum(valence), 2) AS sv, round(sum(energy), 2) AS se,
+      (SELECT string_agg(id || ':' || label, '|' ORDER BY id) FROM clusters) AS cl,
+      (SELECT count(*) FROM tracks) AS nt
+    FROM meta`);
+  const mapKey = sig.row ? `map-${keyHash(JSON.stringify(sig.row))}` : null;
+  const range = useApp((s) => s.range);
+  const rangeKey = `range-${keyHash(`${range.from}/${range.to}/${sig.row?.nt ?? ''}`)}`;
+  const index = useAsync(loadIndex, [], { key: mapKey });
+  const rows = useSql<MapRow>(
+    mapKey
+      ? `SELECT t.uri, t.track, t.artist, m.x, m.y, m.cluster, t.minutes, m.valence, m.energy
+    FROM tracks t JOIN meta m USING (uri) WHERE m.x IS NOT NULL`
+      : null,
+    [],
+    { key: mapKey },
+  );
+  const clusters = useSql<{ id: number; label: string }>(mapKey ? `SELECT id, label FROM clusters ORDER BY id` : null, [], { key: mapKey });
+  const periodUris = useSql<{ uri: string }>(`SELECT DISTINCT uri FROM p`, [], { key: rangeKey });
   const [colorBy, setColorBy] = useState<'cluster' | 'mood'>('cluster');
   const update = useApp((s) => s.updateSettings);
   const [n, setN] = useState(() => getApp().settings.autoEmbeddingsLimit);
