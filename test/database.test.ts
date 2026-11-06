@@ -81,7 +81,7 @@ describe('local API', () => {
     expect(Array.from(emb.vecs)).toEqual([1, 2])
 
     // Isolation: the other analysis doesn't see it.
-    expect((await fetch(`${base}/analyses/${b.id}/kv/kv/plays_ipc`)).status).toBe(404)
+    expect((await fetch(`${base}/analyses/${b.id}/kv/kv/plays_ipc`)).status).toBe(204)
 
     const keys = (await j(`/analyses/${a.id}/kv`)).body as Array<{ key: string }>
     expect(keys.map((k) => k.key).sort()).toEqual(['emb_index', 'plays_ipc', 'profile'])
@@ -93,7 +93,7 @@ describe('local API', () => {
     expect(list[0].id).toBe(a.id) // most recently opened first
 
     expect((await j(`/analyses/${a.id}`, 'DELETE')).status).toBe(200)
-    expect((await fetch(`${base}/analyses/${a.id}/kv/kv/plays_ipc`)).status).toBe(404)
+    expect((await fetch(`${base}/analyses/${a.id}/kv/kv/plays_ipc`)).status).toBe(204)
     expect((await j('/analyses')).body).toHaveLength(1)
     expect((await fetch(`${base}/analyses/${a.id}/kv/kv/x`, { method: 'PUT', body: pack(1) })).status).toBe(404)
   })

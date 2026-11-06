@@ -118,7 +118,8 @@ export async function fetchArtistTagsMB(artist: string, signal: AbortSignal): Pr
   const hit = mbArtistCache.get(artist);
   if (hit !== undefined) return hit;
   const q = encodeURIComponent(`artist:"${artist.replace(/"/g, '')}"`);
-  const res = await netFetch(`https://musicbrainz.org/ws/2/artist/?query=${q}&limit=1&fmt=json`, 'generi MusicBrainz', { signal });
+  // Through the local server: identifying User-Agent + one paced queue (see server/api.ts).
+  const res = await netFetch(`/api/mb/artist?query=${q}`, 'generi MusicBrainz', { signal });
   if (!res.ok) {
     if (res.status === 404) mbArtistCache.set(artist, '');
     if (res.status >= 500 || res.status === 429 || res.status === 503) throw new Error(`MusicBrainz HTTP ${res.status}`);

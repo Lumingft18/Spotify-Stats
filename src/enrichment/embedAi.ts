@@ -1,7 +1,7 @@
 // Taste map (embeddings + UMAP + clusters) as a background job: started automatically after enrichment
 // when an OpenRouter key is set (toggle in Impostazioni), or by hand from Mood & Galassia.
 import { query } from '../data/db';
-import { buildIndex, DEFAULT_EMBED_MODEL, loadIndex } from '../ml/embeddings';
+import { buildIndex, computeLayout, DEFAULT_EMBED_MODEL, loadIndex } from '../ml/embeddings';
 import { getApp } from '../lib/store';
 import { isEnrichmentHeld } from './pause';
 
@@ -48,6 +48,35 @@ export function startEmbeddings(limit: number): Promise<void> {
   return running;
 }
 
+/** Index saved but its map coordinates missing (e.g. the page was closed or reloaded during the layout step). */
+export async function layoutMissing(): Promise<boolean> {
+  const idx = await loadIndex();
+  if (!idx?.uris.length) return false;
+  const [{ n }] = await query<{ n: number }>(`SELECT count(*)::INT AS n FROM meta WHERE x IS NOT NULL`);
+  return n < idx.uris.length * 0.5;
+}
+
+/** Recomputes the map from the saved vectors: local only (UMAP + clusters in a worker), no API call. */
+export function repairLayout(): Promise<void> {
+  if (running) return running;
+  const app = getApp();
+  running = (async () => {
+    try {
+      const idx = await loadIndex();
+      if (!idx) return;
+      app.setJob({ id: EMBED_JOB, label: LABEL, done: 0, total: 1, status: 'running', detail: 'ricalcolo della mappa dai vettori salvati' });
+      await computeLayout(idx, (stage, done, total) => app.setJob({ id: EMBED_JOB, label: LABEL, done, total, status: 'running', detail: stage }));
+      app.setJob({ id: EMBED_JOB, label: LABEL, done: 1, total: 1, status: 'done' });
+    } catch (e) {
+      app.setJob({ id: EMBED_JOB, label: LABEL, done: 0, total: 0, status: 'error', detail: e instanceof Error ? e.message : String(e) });
+    } finally {
+      running = null;
+      getApp().bump();
+    }
+  })();
+  return running;
+}
+
 /** True when there is no index yet, or it covers clearly fewer tracks than the configured size. */
 export async function embeddingsStale(limit: number): Promise<boolean> {
   const idx = await loadIndex();
@@ -58,6 +87,7 @@ export async function embeddingsStale(limit: number): Promise<boolean> {
 
 /** Runs only when enabled in Impostazioni, a key is set and the map is missing or too small. */
 export async function autoEmbeddings(): Promise<void> {
+  if (!ctrl && !running && (await layoutMissing())) await repairLayout();
   const s = getApp().settings;
   if (!s.autoEmbeddings || !embeddingsAvailable() || ctrl || isEnrichmentHeld()) return;
   if (!(await embeddingsStale(s.autoEmbeddingsLimit))) return;

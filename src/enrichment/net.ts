@@ -9,12 +9,36 @@ const sleep = (ms: number, signal?: AbortSignal) =>
     });
   });
 
-/** fetch() wrapper: logs every outbound host (shown in Settings → Connessioni) and retries 429/5xx with backoff. */
+/**
+ * Per-host pacing: minimum gap between request STARTS, shared by every caller (any concurrency, retries included),
+ * so a host never sees more than its documented rate. Concurrency then only hides latency, it can't add load.
+ *  (MusicBrainz goes through the local server, which paces it: /api/mb)
+ *  - lrclib.net: registered client ≈ 180/minute → 340 ms
+ *  - ws.audioscrobbler.com (Last.fm): 5/second averaged over 5 minutes → 250 ms (4/s)
+ */
+const MIN_GAP_MS: Record<string, number> = {
+  'lrclib.net': 340,
+  'ws.audioscrobbler.com': 250,
+};
+const nextSlot = new Map<string, number>();
+
+async function waitTurn(host: string, signal?: AbortSignal | null) {
+  const gap = MIN_GAP_MS[host];
+  if (!gap) return;
+  const now = Date.now();
+  const at = Math.max(now, nextSlot.get(host) ?? 0);
+  nextSlot.set(host, at + gap);
+  if (at > now) await sleep(at - now, signal ?? undefined);
+}
+
+/** fetch() wrapper: paces each host, logs every outbound host (shown in Settings → Connessioni) and retries 429/5xx with backoff. */
 export async function netFetch(url: string, purpose: string, init: RequestInit = {}, retries = 3): Promise<Response> {
-  const host = new URL(url).host;
-  getApp().logNet(host, purpose);
+  const local = url.startsWith('/api/mb/');
+  const host = local ? 'musicbrainz.org' : new URL(url).host;
+  getApp().logNet(local ? 'musicbrainz.org (via server locale)' : host, purpose);
   let attempt = 0;
   for (;;) {
+    if (!local) await waitTurn(host, init.signal);
     const res = await fetch(url, init);
     if ((res.status === 429 || res.status >= 500) && attempt < retries) {
       const ra = Number(res.headers.get('retry-after'));

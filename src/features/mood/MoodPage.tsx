@@ -1,5 +1,5 @@
 import { LimitSelect } from '../../components/LimitSelect';
-import { Fragment, useCallback, useMemo, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Orbit, Search, Sparkles, Wand2, RefreshCw, X } from 'lucide-react';
 import { useSql, useSqlOne, useAsync } from '../../data/useSql';
 import { getApp, useApp } from '../../lib/store';
@@ -8,7 +8,7 @@ import { getMood, MOODS, MOOD_CENTER, MOOD_HEX, MOOD_SQL, moodLabel } from '../.
 import { navigate, routes } from '../../lib/router';
 import { kv } from '../../lib/kv';
 import { computeLayout, DEFAULT_EMBED_MODEL, EMBED_MODELS, loadIndex, semanticSearch } from '../../ml/embeddings';
-import { EMBED_JOB, startEmbeddings, stopEmbeddings } from '../../enrichment/embedAi';
+import { EMBED_JOB, layoutMissing, repairLayout, startEmbeddings, stopEmbeddings } from '../../enrichment/embedAi';
 import { runStep } from '../../enrichment/jobs';
 import { moodCandidates, type MoodRunReport } from '../../llm/mood';
 import { loadMoodBench, runMoodBench, type DimMetric } from '../../llm/moodBench';
@@ -238,6 +238,9 @@ function GalaxySection() {
   const update = useApp((s) => s.updateSettings);
   const [n, setN] = useState(() => getApp().settings.autoEmbeddingsLimit);
   const embJob = useApp((s) => s.jobs[EMBED_JOB]);
+  const jobsAll = useApp((s) => s.jobs);
+  const enriching = ['covers', 'lyrics', 'tags', 'audiofeatures'].some((id) => jobsAll[id]?.status === 'running');
+  const autoMap = useApp((s) => s.settings.autoEmbeddings);
   const [relaying, setBuilding] = useState<{ stage: string; done: number; total: number } | null>(null);
   const building =
     relaying ?? (embJob?.status === 'running' ? { stage: embJob.detail ?? 'Embedding', done: embJob.done, total: embJob.total } : null);
@@ -299,6 +302,14 @@ function GalaxySection() {
     if (j?.status === 'error') setErr(j.detail ?? 'Errore');
   };
 
+  // Vectors saved but no coordinates (layout interrupted by a reload): rebuild the map locally, once.
+  const repaired = useRef(false);
+  useEffect(() => {
+    if (repaired.current || !index.value || rows.loading || (rows.data?.length ?? 0) > 0 || embJob?.status === 'running') return;
+    repaired.current = true;
+    void layoutMissing().then((missing) => (missing ? repairLayout() : undefined));
+  }, [index.value, rows.loading, rows.data, embJob?.status]);
+
   const relayout = async () => {
     const idx = await loadIndex();
     if (!idx) return;
@@ -351,8 +362,14 @@ function GalaxySection() {
         <p className="max-w-2xl text-sm text-text-muted">
           Ogni brano (titolo, artista, album, generi e testo) diventa un vettore con {EMBED_MODELS[DEFAULT_EMBED_MODEL].id} tramite OpenRouter, con la
           tua chiave. Poi una proiezione UMAP, calcolata nel browser, li dispone su una mappa: brani vicini = brani simili. Costo indicativo:
-          circa $0,05 ogni 1.000 brani. Più testi e tag hai arricchito, migliore sarà la mappa.
+          circa $0,05 ogni 1.000 brani (i vettori restano in cache: si pagano una volta). Più testi e tag hai arricchito, migliore sarà la mappa.
         </p>
+        {enriching && autoMap && ai && (
+          <p className="max-w-2xl rounded-xl border border-border bg-surface-2/60 p-3 text-sm text-text-muted">
+            <Spinner size={13} /> Si crea da sola appena finiscono testi e tag (vedi Attività), così entra nella mappa il testo di ogni brano. Se
+            la vuoi subito, “Crea mappa” la fa ora con i dati presenti; alla fine verrà aggiornata.
+          </p>
+        )}
         <div className="flex flex-wrap items-center gap-3">
           <label className="flex items-center gap-2 text-sm text-text-muted">
             Brani

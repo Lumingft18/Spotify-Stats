@@ -22,6 +22,7 @@
 //   POST   /api/embeddings/put      body = pack({model, hashes, vecs: Uint8Array[]})
 //   POST   /api/ai/get              {kind, model, version, uris} → [{uri, value}]
 //   POST   /api/ai/put              {kind, model, version, items: [{uri, value}]}
+//   GET    /api/mb/artist?query=…              MusicBrainz artist search, proxied with an identifying User-Agent and paced
 //   GET    /api/img?u=<cover url>              cover image, downloaded once then served from the database
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { resolve } from 'node:path'
@@ -75,6 +76,22 @@ function sendBytes(res: ServerResponse, data: Uint8Array, type = 'application/oc
   res.end(Buffer.from(data.buffer, data.byteOffset, data.byteLength))
 }
 
+// MusicBrainz asks for ≤ 1 request/second per IP and a meaningful User-Agent (browsers can't set one, and
+// anonymous traffic gets 503s sooner). One queue here serves every tab and every analysis.
+const MB_UA = 'Ascolti/2.0 ( https://github.com/Lumingft18/Spotify-Stats )'
+const MB_GAP_MS = 1100
+let mbNext = 0
+async function mbFetch(path: string): Promise<Response> {
+  const now = Date.now()
+  const at = Math.max(now, mbNext)
+  mbNext = at + MB_GAP_MS
+  if (at > now) await new Promise((r) => setTimeout(r, at - now))
+  return fetch(`https://musicbrainz.org/ws/2/${path}`, {
+    headers: { 'user-agent': MB_UA, accept: 'application/json' },
+    signal: AbortSignal.timeout(20_000),
+  })
+}
+
 const inflightImg = new Map<string, Promise<{ mime: string; data: Uint8Array } | null>>()
 
 async function fetchImage(store: Store, url: string) {
@@ -123,7 +140,12 @@ export function createHandler(store: Store): Connect.NextHandleFunction {
           if (d && e) {
             if (m === 'GET') {
               const v = store.kvGet(b, d, e)
-              return v ? sendBytes(res, v) : sendJson(res, 404, { error: 'chiave assente' })
+              // Missing key = empty, not an error (204 keeps the browser console clean).
+              if (!v) {
+                res.statusCode = 204
+                return res.end()
+              }
+              return sendBytes(res, v)
             }
             if (m === 'PUT') return store.kvSetMany(b, [{ store: d, key: e, value: await bytes(req) }]), sendJson(res, 200, { ok: true })
             if (m === 'DELETE') return store.kvSetMany(b, [{ store: d, key: e, value: null }]), sendJson(res, 200, { ok: true })
@@ -173,6 +195,17 @@ export function createHandler(store: Store): Connect.NextHandleFunction {
         const [k, mo, v] = [body.kind ?? '', body.model ?? '', body.version ?? '']
         if (b === 'get') return sendJson(res, 200, store.aiGet(k, mo, v, body.uris ?? []))
         if (b === 'put') return store.aiPut(k, mo, v, body.items ?? []), sendJson(res, 200, { ok: true })
+      }
+
+      if (a === 'mb' && b === 'artist' && m === 'GET') {
+        const q = url.searchParams.get('query') ?? ''
+        if (!q || q.length > 300) throw new HttpError(400, 'query mancante')
+        const r = await mbFetch(`artist/?query=${encodeURIComponent(q)}&limit=1&fmt=json`)
+        res.statusCode = r.status
+        res.setHeader('content-type', 'application/json; charset=utf-8')
+        const ra = r.headers.get('retry-after')
+        if (ra) res.setHeader('retry-after', ra)
+        return res.end(Buffer.from(await r.arrayBuffer()))
       }
 
       if (a === 'img' && m === 'GET') {

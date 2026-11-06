@@ -37,7 +37,7 @@ export async function apiBytes(path: string, method = 'GET', body?: Uint8Array |
     headers: body === undefined ? undefined : { 'content-type': typeof body === 'string' ? 'application/json' : 'application/octet-stream' },
     body: body as BodyInit | undefined,
   });
-  if (r.status === 404) return null;
+  if (r.status === 404 || r.status === 204) return null;
   return new Uint8Array(await (await check(r)).arrayBuffer());
 }
 

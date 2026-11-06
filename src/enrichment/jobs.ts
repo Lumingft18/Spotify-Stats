@@ -34,7 +34,8 @@ interface StepDef {
   connection: ConnectionId;
   column: string; // meta column that marks "done" when NOT NULL
   batch: number;
-  concurrency: number;
+  /** Parallel workers. Load on each host is capped by netFetch's pacing, not by this. */
+  concurrency: number | (() => number);
   filter?: string; // extra SQL condition on tracks t
   /** Optional custom pending-items query (must return TrackRef columns, ordered by priority). */
   itemsSql?: string | (() => string);
@@ -96,20 +97,17 @@ export const STEPS: Record<StepId, StepDef> = {
     connection: 'lyrics',
     column: 'lyrics',
     batch: 1,
-    // LRCLIB asks for sequential requests with a short pause; registered app ≈180/min.
-    concurrency: 1,
-    run: async (items, s) => {
-      const out = await one(fetchLyrics)(items, s);
-      await sleep(250, s).catch(() => undefined);
-      return out;
-    },
+    // Paced in netFetch at ≈180/min (registered LRCLIB client); 3 workers just hide the latency.
+    concurrency: 3,
+    run: one(fetchLyrics),
   },
   tags: {
     label: 'Tag e generi',
     connection: 'lastfm',
     column: 'tags',
     batch: 1,
-    concurrency: 1,
+    // Paced in netFetch: MusicBrainz 1/s, Last.fm 4/s. Workers only overlap the waiting on responses.
+    concurrency: () => (getApp().settings.lastfmKey ? 4 : 2),
     // With a Last.fm key: per-track tags. Without: per-artist genres from MusicBrainz (free, no key).
     itemsSql: () =>
       getApp().settings.lastfmKey
@@ -126,7 +124,6 @@ export const STEPS: Record<StepId, StepDef> = {
         const tags = await fetchArtistTagsMB(t.artist, s);
         const tracks = await query<{ uri: string }>(`SELECT uri FROM tracks WHERE artist = ?`, [t.artist]);
         for (const x of tracks) out.push({ uri: x.uri, tags });
-        await sleep(1100, s).catch(() => undefined); // MusicBrainz: max ~1 req/s
       }
       return out;
     },
@@ -285,7 +282,7 @@ async function runStepNow(step: StepId, limit: number): Promise<void> {
       }
     };
 
-    await Promise.all(Array.from({ length: d.concurrency }, worker));
+    await Promise.all(Array.from({ length: typeof d.concurrency === 'function' ? d.concurrency() : d.concurrency }, worker));
     await flush(true);
     if (!ctrl.signal.aborted && items.length === pendingAll.length) await kv.del(progressKey);
     if (step === 'audiofeatures') await applyMoodAdjustments();
