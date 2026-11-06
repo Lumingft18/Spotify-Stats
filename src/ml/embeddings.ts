@@ -149,7 +149,7 @@ function buildDoc(r: DocRow, key: EmbedModelKey): string {
   return m.docPrefix(`${r.artist} - ${r.track}`) + parts.join('. ');
 }
 
-/** Embeds the top-N tracks (by listening time), then computes a 2D map and clusters. */
+/** Embeds the top-N tracks (by listening time; limit 0 = all listened tracks), then computes a 2D map and clusters. */
 export async function buildIndex(
   key: EmbedModelKey,
   limit: number,
@@ -160,7 +160,7 @@ export async function buildIndex(
   onProgress('Preparazione', 0, 1);
   const rows = await query<DocRow>(
     `SELECT t.uri, t.track, t.artist, t.album, m.tags, m.lyrics FROM tracks t LEFT JOIN meta m USING (uri)
-     WHERE t.plays > 0 ORDER BY t.minutes DESC LIMIT ${Math.max(10, Math.floor(limit))}`,
+     WHERE t.plays > 0 ORDER BY t.minutes DESC${limit > 0 ? ` LIMIT ${Math.max(10, Math.floor(limit))}` : ''}`,
   );
   const dim = EMBED_MODELS[key].dim;
   const vecs = new Float32Array(rows.length * dim);

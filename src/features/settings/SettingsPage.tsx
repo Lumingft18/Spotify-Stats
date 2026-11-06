@@ -3,6 +3,7 @@ import { EyeOff, RotateCcw, ShieldCheck, Trash2, Upload, Globe, KeyRound, Clock,
 import { checkOpenRouterKey } from '../../llm/client';
 import { catalogStats, clearCatalog } from '../../lib/catalogCache';
 import { analyses, leaveAnalysis } from '../../lib/analyses';
+import { LimitSelect } from '../../components/LimitSelect';
 import { useAsync } from '../../data/useSql';
 import { ENV_KEYS, useApp, type ConnectionId } from '../../lib/store';
 import { getExcluded, query, loadPlays, dropAll } from '../../data/db';
@@ -17,7 +18,7 @@ import { Button, Card, ErrorNote, PageHeader, Section, Spinner, cx } from '../..
 const CONNECTIONS: Array<{ id: ConnectionId; title: string; host: string; sends: string }> = [
   { id: 'covers', title: 'Copertine', host: 'open.spotify.com (oEmbed)', sends: 'ID dei brani, uno alla volta' },
   { id: 'audiofeatures', title: 'Audio features (valence, energia, tempo)', host: 'api.reccobeats.com', sends: 'ID Spotify dei brani, a blocchi di 40' },
-  { id: 'lyrics', title: 'Testi', host: 'lrclib.net', sends: 'titolo, artista, album e durata dei brani più ascoltati' },
+  { id: 'lyrics', title: 'Testi', host: 'lrclib.net', sends: 'titolo, artista, album e durata dei brani (tutti, dai più ascoltati)' },
   { id: 'lastfm', title: 'Tag e generi', host: 'musicbrainz.org (o Last.fm se inserisci la chiave)', sends: 'nome degli artisti (MusicBrainz) oppure titolo e artista (Last.fm)' },
   { id: 'llm', title: 'Funzioni AI (mappa del gusto, mood, nomi, assistente)', host: 'openrouter.ai', sends: 'titoli, artisti, album, tag, estratti di testo e risultati delle query; mai lo storico completo' },
 ];
@@ -234,15 +235,7 @@ function MoodAiSettings() {
       <div className="flex flex-wrap items-center gap-3">
         <label className="flex items-center gap-2 text-sm text-text-muted">
           Brani per avvio
-          <input
-            type="number"
-            min={20}
-            max={5000}
-            step={20}
-            value={settings.autoMoodAiLimit}
-            onChange={(e) => update({ autoMoodAiLimit: Math.max(20, Math.min(5000, Number(e.target.value) || 20)) })}
-            className="h-9 w-24 rounded-lg border border-border bg-surface-1 px-2 text-sm text-text"
-          />
+          <LimitSelect value={settings.autoMoodAiLimit} onChange={(v) => update({ autoMoodAiLimit: v })} label="Brani per avvio" />
         </label>
         {running ? (
           <Button size="sm" variant="danger" onClick={stopMoodAi}>
@@ -268,7 +261,7 @@ function EmbeddingSettings() {
         <div className="min-w-0">
           <div className="font-medium">Crea la mappa del gusto da sola quando c’è una chiave OpenRouter</div>
           <div className="text-xs text-text-faint">
-            Dopo testi e tag calcola gli embedding dei brani più ascoltati, poi mappa UMAP e gruppi (cluster) nel browser. Serve a galassia, ricerca
+            Dopo testi e tag calcola gli embedding di tutti i brani ascoltati (o dei più ascoltati, se scegli un limite), poi mappa UMAP e gruppi (cluster) nel browser. Serve a galassia, ricerca
             semantica, brani simili e somiglianza tra brani consecutivi nel modello degli skip. Invia a OpenRouter titolo, artista, album, tag e un
             estratto del testo. Costo indicativo ~$0,05 ogni 1.000 brani. {hasKey ? '' : 'Ora non c’è una chiave: non parte.'}
           </div>
@@ -286,15 +279,7 @@ function EmbeddingSettings() {
       <div className="flex flex-wrap items-center gap-3">
         <label className="flex items-center gap-2 text-sm text-text-muted">
           Brani nella mappa
-          <input
-            type="number"
-            min={200}
-            max={20000}
-            step={100}
-            value={settings.autoEmbeddingsLimit}
-            onChange={(e) => update({ autoEmbeddingsLimit: Math.max(200, Math.min(20000, Number(e.target.value) || 200)) })}
-            className="h-9 w-24 rounded-lg border border-border bg-surface-1 px-2 text-sm text-text"
-          />
+          <LimitSelect value={settings.autoEmbeddingsLimit} onChange={(v) => update({ autoEmbeddingsLimit: v })} label="Brani nella mappa" />
         </label>
         {running ? (
           <Button size="sm" variant="danger" onClick={stopEmbeddings}>

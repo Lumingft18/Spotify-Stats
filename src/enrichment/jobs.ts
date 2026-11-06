@@ -98,7 +98,6 @@ export const STEPS: Record<StepId, StepDef> = {
     batch: 1,
     // LRCLIB asks for sequential requests with a short pause; registered app ≈180/min.
     concurrency: 1,
-    filter: `t.plays >= 2`,
     run: async (items, s) => {
       const out = await one(fetchLyrics)(items, s);
       await sleep(250, s).catch(() => undefined);
@@ -315,17 +314,13 @@ function runAllEnabledNow() {
   const s = getApp().settings;
   const runs: Array<Promise<void>> = [];
   if (s.connections.covers) void runStep('covers');
-  if (s.connections.audiofeatures) {
-    const af = runStep('audiofeatures');
-    runs.push(af);
-    // AI mood can start as soon as measured anchors exist, on the lyrics/tags already stored…
-    void af.then(autoMoodAi);
-  }
-  // Most-listened first; ~10–15 min each at the providers' polite rates. "Avvia" in Attività continues past these caps.
-  if (s.connections.lyrics) runs.push(runStep('lyrics', 1500));
-  if (s.connections.lastfm) runs.push(runStep('tags', s.lastfmKey ? 3000 : 600));
-  // …and runs again once this session's lyrics/tags are in, to cover the new candidates.
-  // The taste map waits for lyrics/tags too: richer documents give better embeddings.
+  if (s.connections.audiofeatures) runs.push(runStep('audiofeatures'));
+  // Every track, most-listened first, at the providers' polite rates. Results land in the shared catalog,
+  // so only the first analysis that meets a song pays the wait.
+  if (s.connections.lyrics) runs.push(runStep('lyrics'));
+  if (s.connections.lastfm) runs.push(runStep('tags'));
+  // AI mood and the taste map need lyrics/tags (their input) and audio features (anchors): they start ONCE,
+  // when all of those are in. Starting earlier meant a partial run, then new candidates and a second run.
   void Promise.all(runs).then(() => Promise.all([autoMoodAi(), autoEmbeddings()]));
 }
 

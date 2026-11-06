@@ -13,11 +13,11 @@ export interface Settings {
   connections: Record<ConnectionId, boolean>;
   /** Start the AI mood estimate automatically after enrichment when an OpenRouter key is set. */
   autoMoodAi: boolean;
-  /** Max tracks per automatic run (most-listened first). */
+  /** Max tracks per automatic run (most-listened first). 0 = all. */
   autoMoodAiLimit: number;
   /** Build the taste map (embeddings, UMAP, clusters) automatically when an OpenRouter key is set. */
   autoEmbeddings: boolean;
-  /** Tracks embedded by the automatic run (most-listened first). */
+  /** Tracks embedded by the automatic run (most-listened first). 0 = every listened track. */
   autoEmbeddingsLimit: number;
 }
 
@@ -33,9 +33,9 @@ const defaultSettings: Settings = {
   llmModelBulk: 'anthropic/claude-haiku-5.5',
   llmModelAgent: 'anthropic/claude-sonnet-5.5',
   autoMoodAi: true,
-  autoMoodAiLimit: 500,
+  autoMoodAiLimit: 0,
   autoEmbeddings: true,
-  autoEmbeddingsLimit: 3000,
+  autoEmbeddingsLimit: 0,
   connections: {
     covers: true,
     audiofeatures: true,
@@ -63,6 +63,9 @@ function loadSettings(): Settings {
     const raw = localStorage.getItem(SETTINGS_KEY);
     if (!raw) return withEnv(defaultSettings);
     const s = JSON.parse(raw) as Partial<Settings>;
+    // 3000 was the old default (chosen for API cost): vectors are cached now, so the map covers every track.
+    if (s.autoEmbeddingsLimit === 3000) s.autoEmbeddingsLimit = 0;
+    if (s.autoMoodAiLimit === 500) s.autoMoodAiLimit = 0; // same: estimates are cached per song
     return withEnv({ ...defaultSettings, ...s, connections: { ...defaultSettings.connections, ...(s.connections ?? {}) } });
   } catch {
     return withEnv(defaultSettings);

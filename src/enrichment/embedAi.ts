@@ -53,7 +53,7 @@ export async function embeddingsStale(limit: number): Promise<boolean> {
   const idx = await loadIndex();
   if (!idx) return true;
   const [{ n }] = await query<{ n: number }>(`SELECT count(*)::INT AS n FROM tracks WHERE plays > 0`);
-  return idx.uris.length < Math.min(limit, n) * 0.8;
+  return idx.uris.length < (limit > 0 ? Math.min(limit, n) : n) * 0.8;
 }
 
 /** Runs only when enabled in Impostazioni, a key is set and the map is missing or too small. */

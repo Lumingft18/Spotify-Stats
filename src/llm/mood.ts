@@ -201,12 +201,16 @@ export async function estimateMood(
   return out;
 }
 
+/** limit ≤ 0 = no limit. */
+const limitSql = (limit: number) => (limit > 0 ? ` LIMIT ${Math.floor(limit)}` : '');
+
+/** limit ≤ 0 = all candidates. */
 export async function moodCandidates(limit: number) {
   return query<Item>(
     `SELECT t.uri, t.track, t.artist, m.tags, m.lyrics FROM tracks t LEFT JOIN meta m USING (uri)
      WHERE (m.mood_source IS NULL OR m.mood_source IN ('llm_pending', 'llm_rejected')) AND t.plays > 0
        AND ((m.lyrics IS NOT NULL AND m.lyrics <> '') OR (m.tags IS NOT NULL AND m.tags <> ''))
-     ORDER BY t.minutes DESC LIMIT ${Math.floor(limit)}`,
+     ORDER BY t.minutes DESC${limitSql(limit)}`,
   );
 }
 
@@ -292,7 +296,7 @@ export async function lyricsValenceCandidates(limit: number) {
     `SELECT t.uri, t.track, t.artist, m.lyrics FROM tracks t JOIN meta m USING (uri)
      WHERE m.valence_audio IS NOT NULL AND m.valence_lyrics IS NULL
        AND m.lyrics IS NOT NULL AND length(m.lyrics) > 80 AND m.lyrics <> '[strumentale]' AND t.plays > 0
-     ORDER BY t.minutes DESC LIMIT ${Math.floor(limit)}`,
+     ORDER BY t.minutes DESC${limitSql(limit)}`,
   );
 }
 

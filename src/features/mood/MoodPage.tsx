@@ -1,3 +1,4 @@
+import { LimitSelect } from '../../components/LimitSelect';
 import { Fragment, useCallback, useMemo, useState } from 'react';
 import { Orbit, Search, Sparkles, Wand2, RefreshCw, X } from 'lucide-react';
 import { useSql, useSqlOne, useAsync } from '../../data/useSql';
@@ -140,12 +141,13 @@ function MoodStatus() {
   const autoMood = useApp((s) => s.settings.autoMoodAi);
   const running = aiJob?.status === 'running';
   const [err, setErr] = useState<string | null>(null);
-  const [limit, setLimit] = useState(400);
-  const candidates = useAsync(() => moodCandidates(5000));
+  const [limit, setLimit] = useState(() => getApp().settings.autoMoodAiLimit);
+  const candidates = useAsync(() => moodCandidates(0));
   const c = cov.row;
   const pct = c && c.total ? c.with_mood / c.total : 0;
   const nCand = candidates.value?.length ?? 0;
-  const estTok = estimateTokens(Math.min(limit, nCand) * 520 + Math.ceil(Math.min(limit, nCand) / 12) * 6000) * 2;
+  const nRun = limit > 0 ? Math.min(limit, nCand) : nCand;
+  const estTok = estimateTokens(nRun * 520 + Math.ceil(nRun / 12) * 6000) * 2;
 
   const runLlm = async () => {
     setErr(null);
@@ -193,17 +195,9 @@ function MoodStatus() {
         <div className="mt-3 flex flex-wrap items-center gap-3">
           <label className="flex items-center gap-2 text-xs text-text-muted">
             Brani
-            <input
-              type="number"
-              min={20}
-              max={5000}
-              step={20}
-              value={limit}
-              onChange={(e) => setLimit(Number(e.target.value))}
-              className="h-8 w-24 rounded-lg border border-border bg-surface-1 px-2 text-sm text-text"
-            />
+            <LimitSelect value={limit} onChange={setLimit} label="Brani da stimare" className="h-8 rounded-lg border border-border bg-surface-1 px-2 text-sm text-text" />
           </label>
-          <span className="num text-xs text-text-faint">≈ {fmtInt(estTok)} token</span>
+          <span className="num text-xs text-text-faint" title="Massimo: i brani già stimati (da qualsiasi analisi) vengono dalla cache e non costano">≤ {fmtInt(estTok)} token</span>
           {running ? (
             <Button size="sm" variant="danger" onClick={stopMoodAi}>
               <X size={14} /> Ferma{aiJob && aiJob.total > 0 ? ` (${fmtInt(aiJob.done)}/${fmtInt(aiJob.total)})` : ''}
@@ -362,7 +356,7 @@ function GalaxySection() {
         <div className="flex flex-wrap items-center gap-3">
           <label className="flex items-center gap-2 text-sm text-text-muted">
             Brani
-            <input type="number" min={100} max={20000} step={100} value={n} onChange={(e) => setN(Number(e.target.value))} className="h-9 w-24 rounded-full border border-border bg-surface-2 px-3 text-sm text-text" />
+            <LimitSelect value={n} onChange={setN} label="Brani nella mappa" />
           </label>
           <Button variant="primary" onClick={() => void build()} disabled={!ai}>
             <Orbit size={16} /> Crea mappa
