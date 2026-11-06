@@ -1,3 +1,4 @@
+import { AXIS_MIN_R, genreLandmarks, mapAxes } from '../../ml/mapAxes';
 import { LimitSelect } from '../../components/LimitSelect';
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Orbit, Search, Sparkles, Wand2, RefreshCw, X } from 'lucide-react';
@@ -36,6 +37,10 @@ interface MapRow {
   minutes: number;
   valence: number | null;
   energy: number | null;
+  danceability: number | null;
+  acousticness: number | null;
+  year: number | null;
+  tags: string | null;
 }
 
 function BenchRow({ label, d, base, useful }: { label: string; d: DimMetric; base: number; useful: boolean }) {
@@ -247,7 +252,8 @@ function GalaxySection() {
   const index = useAsync(loadIndex, [], { key: mapKey });
   const rows = useSql<MapRow>(
     mapKey
-      ? `SELECT t.uri, t.track, t.artist, m.x, m.y, m.cluster, t.minutes, m.valence, m.energy
+      ? `SELECT t.uri, t.track, t.artist, m.x, m.y, m.cluster, t.minutes, m.valence, m.energy,
+        m.danceability, m.acousticness, year(t.first_day) AS year, m.tags
     FROM tracks t JOIN meta m USING (uri) WHERE m.x IS NOT NULL`
       : null,
     [],
@@ -256,6 +262,9 @@ function GalaxySection() {
   const clusters = useSql<{ id: number; label: string }>(mapKey ? `SELECT id, label FROM clusters ORDER BY id` : null, [], { key: mapKey });
   const periodUris = useSql<{ uri: string }>(`SELECT DISTINCT uri FROM p`, [], { key: rangeKey });
   const [colorBy, setColorBy] = useState<'cluster' | 'mood'>('cluster');
+  const [labelMode, setLabelMode] = useState<'groups' | 'genres'>('groups');
+  const axes = useMemo(() => (rows.data?.length ? mapAxes(rows.data) : null), [rows.data]);
+  const landmarks = useMemo(() => (rows.data?.length ? genreLandmarks(rows.data) : []), [rows.data]);
   const update = useApp((s) => s.updateSettings);
   const [n, setN] = useState(() => getApp().settings.autoEmbeddingsLimit);
   const embJob = useApp((s) => s.jobs[EMBED_JOB]);
@@ -475,13 +484,22 @@ function GalaxySection() {
             { value: 'mood', label: 'Per mood' },
           ]}
         />
+        <Segmented
+          value={labelMode}
+          onChange={setLabelMode}
+          options={[
+            { value: 'groups', label: 'Etichette: gruppi' },
+            { value: 'genres', label: 'Generi' },
+          ]}
+        />
       </div>
       {err && <ErrorNote>{err}</ErrorNote>}
       <Card className="overflow-hidden p-0">
         {rows.data ? (
           <Galaxy
             points={points}
-            labels={colorBy === 'cluster' && !hits ? labels : undefined}
+            labels={hits ? undefined : labelMode === 'genres' ? landmarks : colorBy === 'cluster' ? labels : undefined}
+            axes={axes ?? undefined}
             height={560}
             onPick={(id) => navigate(routes.track(id))}
             onLasso={(ids) => setSelection(ids)}
@@ -490,6 +508,30 @@ function GalaxySection() {
           <Skeleton className="h-[560px]" />
         )}
       </Card>
+      <details className="text-xs text-text-muted">
+        <summary className="cursor-pointer text-text-faint hover:text-text-muted">Come leggere la mappa</summary>
+        <div className="mt-2 max-w-3xl space-y-1.5 leading-relaxed">
+          <p>
+            Ogni punto è un brano; la grandezza è il tempo di ascolto. Due brani sono vicini quando si somigliano in titolo, artista, generi e testo
+            (vettore di embedding) e, in parte, in valence, energia, ballabilità e acusticità.
+          </p>
+          <p>
+            Fidati delle <b className="text-text">vicinanze</b>, non delle distanze lunghe: UMAP conserva chi sta accanto a chi, ma la distanza tra due
+            gruppi lontani e la posizione assoluta non hanno un significato preciso. Ricalcolando, la mappa può ruotare o specchiarsi.
+          </p>
+          <p>
+            Gli <b className="text-text">assi</b> non hanno un significato fisso. Ai bordi compare una direzione solo se una caratteristica misurata
+            cambia davvero lungo quell’asse su questa mappa (correlazione |r| ≥ {AXIS_MIN_R}):
+            {' '}
+            {axes?.x ? `orizzontale = ${axes.x.feature} (r ${axes.x.r.toFixed(2)})` : 'orizzontale: nessuna caratteristica lo spiega'}
+            {'; '}
+            {axes?.y ? `verticale = ${axes.y.feature} (r ${axes.y.r.toFixed(2)})` : 'verticale: nessuna caratteristica lo spiega'}.
+          </p>
+          <p>
+            “Generi” mette il nome di un genere solo dove i suoi brani sono davvero raccolti; i generi sparsi su tutta la mappa non vengono mostrati.
+          </p>
+        </div>
+      </details>
 
       {hits && (
         <div>

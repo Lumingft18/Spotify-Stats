@@ -34,7 +34,10 @@ export function Galaxy({
   onPick,
   onLasso,
   labels,
+  axes,
 }: {
+  /** Measured directions, shown at the edges (low = left/top, high = right/bottom on screen). */
+  axes?: { x?: { low: string; high: string; r: number } | null; y?: { low: string; high: string; r: number } | null };
   points: GalaxyPoint[];
   height?: number;
   onPick?: (id: string) => void;
@@ -86,16 +89,16 @@ export function Galaxy({
   // Normalize data coordinates into [pad, size-pad].
   const norm = useMemo(() => {
     if (!points.length) return { sx: (v: number) => v, sy: (v: number) => v };
-    let x0 = Infinity,
-      x1 = -Infinity,
-      y0 = Infinity,
-      y1 = -Infinity;
-    for (const p of points) {
-      if (p.x < x0) x0 = p.x;
-      if (p.x > x1) x1 = p.x;
-      if (p.y < y0) y0 = p.y;
-      if (p.y > y1) y1 = p.y;
-    }
+    // Frame the 1st–99th percentile: a few isolated tracks must not squeeze everything else into the middle
+    // (they stay drawn, just near or past the edge; zoom out to see them).
+    const q = (vals: number[], p: number) => vals[Math.min(vals.length - 1, Math.max(0, Math.round(p * (vals.length - 1))))];
+    const xs = points.map((p) => p.x).sort((a, b) => a - b);
+    const ys = points.map((p) => p.y).sort((a, b) => a - b);
+    const lo = points.length > 200 ? 0.01 : 0;
+    const x0 = q(xs, lo),
+      x1 = q(xs, 1 - lo),
+      y0 = q(ys, lo),
+      y1 = q(ys, 1 - lo);
     const pad = 28;
     const w = Math.max(1, size.w - pad * 2);
     const h = Math.max(1, size.h - pad * 2);
@@ -256,6 +259,21 @@ export function Galaxy({
           ⟲
         </button>
       </div>
+      {axes?.x && (
+        <>
+          <div className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 rounded-md bg-bg/70 px-1.5 py-0.5 text-[11px] text-text-muted">← {axes.x.low}{Math.abs(axes.x.r) < 0.4 ? ' (tendenza)' : ''}</div>
+          <div className="pointer-events-none absolute right-14 top-1/2 -translate-y-1/2 rounded-md bg-bg/70 px-1.5 py-0.5 text-[11px] text-text-muted">{axes.x.high}{Math.abs(axes.x.r) < 0.4 ? ' (tendenza)' : ''} →</div>
+        </>
+      )}
+      {axes?.y && (
+        <>
+          <div className="pointer-events-none absolute left-1/2 top-2 -translate-x-1/2 rounded-md bg-bg/70 px-1.5 py-0.5 text-[11px] text-text-muted">↑ {axes.y.low}{Math.abs(axes.y.r) < 0.4 ? ' (tendenza)' : ''}</div>
+          <div className="pointer-events-none absolute bottom-7 left-1/2 -translate-x-1/2 rounded-md bg-bg/70 px-1.5 py-0.5 text-[11px] text-text-muted">↓ {axes.y.high}{Math.abs(axes.y.r) < 0.4 ? ' (tendenza)' : ''}</div>
+        </>
+      )}
+      {axes && !axes.x && !axes.y && (
+        <div className="pointer-events-none absolute left-3 top-3 rounded-md bg-bg/70 px-1.5 py-0.5 text-[11px] text-text-faint">assi senza significato fisso · conta chi è vicino a chi</div>
+      )}
       {zoomHint && (
         <div className="pointer-events-none absolute inset-0 grid place-items-center bg-black/35 text-sm font-medium text-white transition-opacity">
           Tieni premuto ⌘ (o pizzica sul trackpad) per lo zoom

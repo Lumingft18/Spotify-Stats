@@ -93,3 +93,32 @@ describe('auc', () => {
     expect(auc([1, 2, 3], [0, 0, 0])).toBe(0.5);
   });
 });
+
+import { genreLandmarks, mapAxes, type AxisRow } from '../src/ml/mapAxes'
+
+describe('map reading aids', () => {
+  const rnd = (() => {
+    let s = 7
+    return () => ((s = (s * 16807) % 2147483647) - 1) / 2147483646
+  })()
+  const rows: AxisRow[] = Array.from({ length: 600 }, (_, i) => {
+    const rock = i % 2 === 0
+    const x = (rock ? -3 : 3) + rnd()
+    const y = rnd() * 6
+    return { x, y, energy: rock ? 0.8 + rnd() * 0.1 : 0.3 + rnd() * 0.1, valence: rnd(), danceability: null, acousticness: null, year: null, tags: rock ? 'rock, pop' : 'jazz, pop' }
+  })
+
+  it('labels an axis only with a feature that varies along it', () => {
+    const a = mapAxes(rows)
+    expect(a.x?.feature).toBe('energia')
+    expect(a.x?.low).toBe('più energico') // rock (high energy) sits on the left
+    expect(a.y).toBeNull() // valence is random along y
+  })
+
+  it('places concentrated genres, skips genres spread everywhere', () => {
+    const marks = genreLandmarks(rows).map((m) => m.text)
+    expect(marks).toContain('rock')
+    expect(marks).toContain('jazz')
+    expect(marks).not.toContain('pop')
+  })
+})
