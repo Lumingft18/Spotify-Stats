@@ -232,7 +232,12 @@ export default function TrackPage({ uri }: { uri: string }) {
                 )}
                 {t.tempo ? <div className="num text-sm text-text-muted">{Math.round(t.tempo)} BPM</div> : null}
                 <div className="text-xs text-text-faint">
-                  Fonte: {t.mood_source === 'reccobeats' ? 'audio features misurate (ReccoBeats)' : `stima AI da testo e tag · confidenza ${fmtPct(t.mood_conf ?? 0)}`}
+                  Fonte:{' '}
+                  {t.mood_source === 'reccobeats'
+                    ? 'audio features misurate (ReccoBeats)'
+                    : t.mood_source === 'artist'
+                      ? `stima dalla media dei brani misurati dello stesso artista · confidenza ${fmtPct(t.mood_conf ?? 0)}`
+                      : `stima AI da testo e tag · confidenza ${fmtPct(t.mood_conf ?? 0)}`}
                 </div>
               </>
             ) : (

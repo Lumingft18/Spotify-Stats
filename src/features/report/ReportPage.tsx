@@ -759,7 +759,7 @@ function Report({ r, name, range, today }: { r: ReportData; name: string | null;
           </div>
         </div>
         <p className="doc-note">
-          “Ascolto” = almeno 30 secondi. Sessione = ascolti separati da meno di 30 minuti. Copertine da Spotify, audio features da ReccoBeats, mood stimato dove mancanti.
+          “Ascolto” = almeno 30 secondi. Sessione = ascolti separati da meno di 30 minuti. Copertine da Spotify, audio features da ReccoBeats; dove mancano, mood stimato dai brani misurati dello stesso artista o con AI (solo se batte la media sul benchmark).
           {r.excluded > 0 && ` ${fmtInt(r.excluded)} ${r.excluded === 1 ? 'brano escluso' : 'brani esclusi'} dalle statistiche (Impostazioni → Esclusi).`}
         </p>
       </Page>

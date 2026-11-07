@@ -36,6 +36,8 @@ interface StepDef {
   label: string;
   connection: ConnectionId;
   column: string; // meta column that marks "done" when NOT NULL
+  /** Extra SQL (on meta m) that still counts as "to fetch" even when `column` is set (e.g. an estimate a measurement replaces). */
+  alsoPending?: string;
   batch: number;
   /** Parallel workers. Load on each host is capped by netFetch's pacing, not by this. */
   concurrency: number | (() => number);
@@ -90,6 +92,7 @@ export const STEPS: Record<StepId, StepDef> = {
     label: 'Audio features (valence, energia)',
     connection: 'audiofeatures',
     column: 'mood_source',
+    alsoPending: `m.mood_source = 'artist'`,
     batch: 40,
     concurrency: 2,
     filter: `t.uri LIKE 'spotify:track:%'`,
@@ -161,7 +164,7 @@ export async function pendingCount(step: StepId): Promise<number> {
   const d = STEPS[step];
   const rows = await query<{ uri: string }>(
     (typeof d.itemsSql === 'function' ? d.itemsSql() : d.itemsSql) ??
-      `SELECT t.uri FROM tracks t LEFT JOIN meta m USING (uri) WHERE m.${d.column} IS NULL AND t.plays > 0 ${d.filter ? 'AND ' + d.filter : ''}`,
+      `SELECT t.uri FROM tracks t LEFT JOIN meta m USING (uri) WHERE (m.${d.column} IS NULL${d.alsoPending ? ` OR ${d.alsoPending}` : ''}) AND t.plays > 0 ${d.filter ? 'AND ' + d.filter : ''}`,
   );
   const tried = await loadTried(step, rows.map((r) => r.uri));
   return rows.filter((r) => !tried.has(r.uri)).length;
@@ -192,7 +195,7 @@ async function runStepNow(step: StepId, limit: number): Promise<void> {
     const rows = await query<TrackRef>(
       (typeof d.itemsSql === 'function' ? d.itemsSql() : d.itemsSql) ??
         `SELECT t.uri, t.track, t.artist, t.album, t.duration_ms FROM tracks t LEFT JOIN meta m USING (uri)
-       WHERE m.${d.column} IS NULL AND t.plays > 0 ${d.filter ? 'AND ' + d.filter : ''}
+       WHERE (m.${d.column} IS NULL${d.alsoPending ? ` OR ${d.alsoPending}` : ''}) AND t.plays > 0 ${d.filter ? 'AND ' + d.filter : ''}
        ORDER BY t.minutes DESC`,
     );
     const tried = await loadTried(step, rows.map((r) => r.uri));
@@ -313,7 +316,7 @@ async function seedFromCatalog(): Promise<void> {
     SELECT t.uri FROM tracks t LEFT JOIN meta m USING (uri)
     WHERE t.plays > 0 AND t.uri LIKE 'spotify:track:%'
       AND (m.uri IS NULL OR m.cover IS NULL OR m.lyrics IS NULL OR m.tags IS NULL
-           OR m.mood_source IS NULL OR m.valence IS NULL)`);
+           OR m.mood_source IS NULL OR m.mood_source = 'artist' OR m.valence IS NULL)`);
   if (!missing.length) return;
   const cat = await readCatalog(missing.map((r) => r.uri)).catch(() => [] as MetaRow[]);
   if (!cat.length) return;

@@ -9,7 +9,7 @@ const CACHED_KEYS = ['cover', 'valence', 'energy', 'danceability', 'tempo', 'aco
 /** Stores only catalog-level fields; skips AI estimates (never shared as if they were measurements). */
 export async function cacheCatalog(rows: MetaRow[]): Promise<void> {
   const useful = rows
-    .filter((r) => r.uri.startsWith('spotify:track:') && CACHED_KEYS.some((k) => k in r && r[k] != null) && (r.mood_source ?? 'reccobeats') !== 'llm')
+    .filter((r) => r.uri.startsWith('spotify:track:') && CACHED_KEYS.some((k) => k in r && r[k] != null) && !['llm', 'artist'].includes(String(r.mood_source ?? 'reccobeats')))
     .map((r) => {
       const o: MetaRow = { uri: r.uri };
       for (const k of CACHED_KEYS) if (k in r && r[k] != null) o[k] = r[k];

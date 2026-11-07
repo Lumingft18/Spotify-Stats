@@ -10,6 +10,7 @@ import { kv } from '../lib/kv';
 import { getApp } from '../lib/store';
 import { isEnrichmentHeld } from './pause';
 import { markWork } from './completion';
+import { applyArtistMood, clearArtistEstimates, runArtistBench } from '../data/moodArtist';
 
 export const MOOD_AI_JOB = 'mood_llm';
 const LABEL = 'Mood AI';
@@ -48,6 +49,14 @@ export async function startMoodAi(opts: { limit: number; samples?: 1 | 2 | 3 }):
   };
   try {
     let report: MoodRunReport | null = null;
+    // Artist estimate vs AI estimate: the one with the better benchmark goes first, the other fills what's left.
+    phase = 'stima dalla media dell’artista (benchmark)';
+    job('running');
+    const ab = await runArtistBench();
+    const lb = await currentBench();
+    const artistFirst = !!ab?.useful.valence && (!lb || !lb.result.useful.valence || ab.valence.skill >= lb.result.valence.skill);
+    if (artistFirst) await applyArtistMood();
+    else await clearArtistEstimates();
     // 1) Tracks without audio features: valence + energy from lyrics and tags, only if the estimator passes the benchmark.
     if (moodAiAvailable() && (await moodCandidates(1)).length) {
       let b = await currentBench();
@@ -70,6 +79,10 @@ export async function startMoodAi(opts: { limit: number; samples?: 1 | 2 | 3 }):
     if (!c.signal.aborted && lyricsAvailable() && (await lyricsValenceCandidates(1)).length) {
       phase = 'positività dei testi (unita a quella audio)';
       await runLyricsValence({ limit: opts.limit, signal: c.signal, onProgress: progress });
+    }
+    if (!c.signal.aborted && !artistFirst) {
+      phase = 'stima dalla media dell’artista';
+      await applyArtistMood();
     }
     await applyMoodAdjustments();
     await persistMeta();
@@ -100,9 +113,15 @@ async function requeueOldEstimates() {
 export async function autoMoodAi(): Promise<void> {
   await requeueOldEstimates();
   const s = getApp().settings;
-  if (!s.autoMoodAi || (!moodAiAvailable() && !lyricsAvailable()) || ctrl || isEnrichmentHeld()) return;
-  const b = await currentBench();
-  const moodTodo = moodAiAvailable() && (await moodCandidates(1)).length > 0 && (!b || b.result.useful.valence);
-  if (!moodTodo && !(lyricsAvailable() && (await lyricsValenceCandidates(1)).length)) return;
-  await startMoodAi({ limit: s.autoMoodAiLimit }).catch(() => undefined);
+  if (ctrl || isEnrichmentHeld()) return;
+  if (s.autoMoodAi && (moodAiAvailable() || lyricsAvailable())) {
+    const b = await currentBench();
+    const moodTodo = moodAiAvailable() && (await moodCandidates(1)).length > 0 && (!b || b.result.useful.valence);
+    if (moodTodo || (lyricsAvailable() && (await lyricsValenceCandidates(1)).length)) {
+      await startMoodAi({ limit: s.autoMoodAiLimit }).catch(() => undefined); // includes the artist estimate
+      return;
+    }
+  }
+  // No AI run needed (or possible): the artist estimate is free, always refresh it.
+  await applyArtistMood().catch((e) => console.warn('stima mood dall’artista', e));
 }

@@ -2,7 +2,7 @@ import { CLUSTER_COLORS } from '../../lib/color';
 import { AXIS_MIN_R, genreLandmarks, mapAxes } from '../../ml/mapAxes';
 import { LimitSelect } from '../../components/LimitSelect';
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Orbit, Search, Sparkles, Wand2, RefreshCw, X } from 'lucide-react';
+import { Orbit, Search, Sparkles, Wand2, RefreshCw, X, Users } from 'lucide-react';
 import { useSql, useSqlOne, useAsync } from '../../data/useSql';
 import { getApp, useApp } from '../../lib/store';
 import { fmtHours, fmtInt, fmtPct, fmtMonth } from '../../lib/format';
@@ -23,6 +23,7 @@ import { MoodPlane } from '../../components/charts/common';
 import { PlotChart, Plot } from '../../components/charts/PlotChart';
 import { MoodTimeline } from './MoodTimeline';
 import { MOOD_AI_JOB, startMoodAi, stopMoodAi } from '../../enrichment/moodAi';
+import { ARTIST_K, ARTIST_MIN, applyArtistMood, loadArtistBench } from '../../data/moodArtist';
 import { StoryButton } from '../../components/StoryButton';
 import { periodLabel } from '../../lib/storyCard';
 
@@ -131,12 +132,77 @@ function MoodBenchCard() {
   );
 }
 
+/** Free estimate from the artist's measured tracks, gated by its own leave-one-out benchmark. */
+function ArtistMoodCard({ count }: { count: number }) {
+  const epoch = useApp((s) => s.epoch);
+  const bench = useAsync(loadArtistBench, [epoch]);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const b = bench.value;
+  const run = async () => {
+    setErr(null);
+    setBusy(true);
+    try {
+      await applyArtistMood();
+      useApp.getState().bump();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="rounded-xl border border-border bg-surface-2/50 p-3 text-sm">
+      <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2 font-medium">
+          <Users size={15} className="text-[var(--accent)]" /> Stima dalla media dell’artista
+        </div>
+        <Button size="sm" variant="ghost" disabled={busy} onClick={() => void run()}>
+          {busy ? <Spinner size={12} /> : <RefreshCw size={12} />} Ricalcola
+        </Button>
+      </div>
+      <p className="text-text-muted">
+        Per i brani senza audio features: media dei brani misurati dello stesso artista (almeno {ARTIST_MIN}), avvicinata alla media generale
+        quando sono pochi. Gratis, nessuna chiamata esterna. È una stima, non una misura: viene sostituita appena arrivano le audio features.
+        {count > 0 ? ` ${fmtInt(count)} brani stimati così.` : ''}
+      </p>
+      {b && (
+        <div className="mt-2 overflow-x-auto text-xs">
+          <div className="mb-1 text-text-faint">
+            Benchmark: {fmtInt(b.n)} brani misurati, ognuno stimato dagli altri brani dello stesso artista (mai da sé stesso) · shrink {ARTIST_K} ·{' '}
+            {new Date(b.at).toLocaleDateString('it-IT')}
+          </div>
+          <table className="w-full text-left">
+            <thead className="text-text-faint">
+              <tr>
+                <th className="pr-3 font-normal">dimensione</th>
+                <th className="pr-3 font-normal">errore medio (IC 95%)</th>
+                <th className="pr-3 font-normal">costante</th>
+                <th className="pr-3 font-normal">r (IC 95%)</th>
+                <th className="pr-3 font-normal">skill</th>
+                <th className="font-normal">esito</th>
+              </tr>
+            </thead>
+            <tbody>
+              <BenchRow label="valence" d={b.valence} base={b.baseline.maeValence} useful={b.useful.valence} />
+              <BenchRow label="energia" d={b.energy} base={b.baseline.maeEnergy} useful={b.useful.energy} />
+            </tbody>
+          </table>
+          {!b.useful.valence && <div className="mt-1 text-text-faint">Non batte la media sulla positività: nessuna stima scritta.</div>}
+        </div>
+      )}
+      {err && <div className="mt-2"><ErrorNote>{err}</ErrorNote></div>}
+    </div>
+  );
+}
+
 function MoodStatus() {
   const ai = useLlmAvailable();
-  const cov = useSqlOne<{ with_mood: number; total: number; reccobeats: number; llm: number; live: number; lyrics: number }>(`
+  const cov = useSqlOne<{ with_mood: number; total: number; reccobeats: number; llm: number; artist: number; live: number; lyrics: number }>(`
     SELECT sum(minutes) FILTER (WHERE p.valence IS NOT NULL) AS with_mood, sum(minutes) AS total,
            count(DISTINCT p.uri) FILTER (WHERE m.mood_source = 'reccobeats') AS reccobeats,
            count(DISTINCT p.uri) FILTER (WHERE m.mood_source IN ('llm', 'llm_pending')) AS llm,
+           count(DISTINCT p.uri) FILTER (WHERE m.mood_source = 'artist') AS artist,
            count(DISTINCT p.uri) FILTER (WHERE m.mood_adj LIKE 'live:studio%') AS live,
            count(DISTINCT p.uri) FILTER (WHERE m.valence_lyrics IS NOT NULL) AS lyrics
     FROM p LEFT JOIN meta m USING (uri)`);
@@ -170,7 +236,7 @@ function MoodStatus() {
           <div className="text-xs text-text-faint">Copertura mood (sul tempo di ascolto)</div>
           <div className="num text-3xl">{fmtPct(pct)}</div>
           <div className="text-xs text-text-muted">
-            {fmtInt(c?.reccobeats ?? 0)} brani misurati · {fmtInt(c?.llm ?? 0)} stimati con AI
+            {fmtInt(c?.reccobeats ?? 0)} brani misurati · {fmtInt(c?.llm ?? 0)} stimati con AI · {fmtInt(c?.artist ?? 0)} stimati dall’artista
           </div>
           {!!(c?.live || c?.lyrics) && (
             <div className="text-xs text-text-faint" title="Live: valori presi dalla versione in studio. Testo: positività = 65% audio + 35% testo (Delbouys et al. 2018).">
@@ -187,6 +253,7 @@ function MoodStatus() {
       <div className="w-full">
         <Meter value={pct} max={1} />
       </div>
+      <ArtistMoodCard count={c?.artist ?? 0} />
       <div className="rounded-xl border border-border bg-surface-2/50 p-3 text-sm">
         <div className="mb-1 flex items-center gap-2 font-medium">
           <Sparkles size={15} className="text-[var(--accent)]" /> Stima AI per i brani senza audio features
