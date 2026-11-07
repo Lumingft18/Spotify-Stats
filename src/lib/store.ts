@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import type { AccountProfile } from '../data/account';
 import type { Analysis } from './analyses';
+import type { QueueItem } from './importQueue';
 
 export type ConnectionId = 'covers' | 'audiofeatures' | 'lyrics' | 'lastfm' | 'llm' | 'embedModel';
 
@@ -104,6 +105,8 @@ interface AppState {
   epoch: number;
   settings: Settings;
   jobs: Record<string, Job>;
+  /** Other people's exports waiting to be imported (see lib/importQueue). */
+  queue: QueueItem[];
   net: NetEvent[];
   paletteOpen: boolean;
   activityOpen: boolean;
@@ -126,6 +129,7 @@ export const useApp = create<AppState>((set, get) => ({
   epoch: 0,
   settings: loadSettings(),
   jobs: {},
+  queue: [],
   net: [],
   paletteOpen: false,
   activityOpen: false,
@@ -140,7 +144,10 @@ export const useApp = create<AppState>((set, get) => ({
     }
     set({ settings: next });
   },
-  setJob: (j) => set({ jobs: { ...get().jobs, [j.id]: j } }),
+  setJob: (j) => {
+    set({ jobs: { ...get().jobs, [j.id]: j } });
+    void import('../enrichment/keepAwake').then((m) => m.syncKeepAwake()).catch(() => undefined);
+  },
   logNet: (host, purpose) => {
     const net = get().net;
     const last = net[net.length - 1];

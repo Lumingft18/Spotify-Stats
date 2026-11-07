@@ -8,6 +8,8 @@ import { readCatalog } from '../lib/catalogCache';
 import { runAllEnabled } from '../enrichment/jobs';
 import { analyses, currentAnalysisId, setCurrentAnalysis } from '../lib/analyses';
 import { applyMoodAdjustments } from './moodAdjust';
+import { processNext } from '../lib/importQueue';
+import { navigate, routes } from '../lib/router';
 
 /** Re-applies cached public metadata (covers, audio features) to the loaded tracks — no network needed. */
 async function hydrateFromCatalog() {
@@ -176,4 +178,18 @@ export async function includeTrack(uri: string) {
 
 export async function includeAll() {
   await applyExcluded([]);
+}
+
+/**
+ * Imports the next queued person into a new analysis (start screen only) and opens it.
+ * Returns false when nothing was waiting (or every entry failed: their errors stay in the queue).
+ */
+export function importNextQueued(): Promise<boolean> {
+  return processNext(async (e) => {
+    const app = getApp();
+    app.set({ status: 'importing', importStep: `Preparazione… (${e.name || e.files[0]?.name || 'in coda'})` });
+    const out = await importFiles(e.files, (s) => app.set({ importStep: s }), { mode: 'replace', name: e.name, newAnalysis: true });
+    navigate(out.historyKind === 'extended' ? routes.story() : routes.overview());
+    return currentAnalysisId();
+  });
 }

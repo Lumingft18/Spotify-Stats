@@ -1,17 +1,18 @@
 import { useRef, useState } from 'react';
 import { Upload, ShieldCheck, Mail, FileArchive, Sparkles, Cpu } from 'lucide-react';
 import { useApp } from '../../lib/store';
-import { importFiles } from '../../data/lifecycle';
-import { hasAccountData } from '../../data/import';
-import { navigate, routes } from '../../lib/router';
+import { importNextQueued } from '../../data/lifecycle';
+import { checkQueueFiles, enqueue } from '../../lib/importQueue';
 import { Button, ErrorNote, Spinner, cx } from '../../components/ui';
+import { QueueList } from '../../components/ImportQueue';
 import { SavedAnalyses } from './SavedAnalyses';
 
 export function Onboarding() {
   const status = useApp((s) => s.status);
   const step = useApp((s) => s.importStep);
-  const set = useApp((s) => s.set);
   const serverUp = useApp((s) => s.serverUp);
+  const queued = useApp((s) => s.queue.length);
+  const waiting = useApp((s) => s.queue.filter((q) => !q.error && !q.importing).length);
   const [error, setError] = useState<string | null>(null);
   const [drag, setDrag] = useState(false);
   const [name, setName] = useState('');
@@ -20,31 +21,32 @@ export function Onboarding() {
   const input = useRef<HTMLInputElement>(null);
   const nameInput = useRef<HTMLInputElement>(null);
 
+  /** Every drop is one person: it joins the queue, and the queue starts if nothing is being imported. */
   const handle = async (list: FileList | File[] | null) => {
-    const files = Array.from(list ?? []).filter((f) => /\.(zip|json)$/i.test(f.name));
+    const picked = Array.from(list ?? []); // copy first: clearing the input empties its live FileList
     if (input.current) input.current.value = ''; // the same file can be chosen again
-    if (!files.length) {
-      setError('Seleziona il file .zip esportato da Spotify (oppure i file .json al suo interno).');
+    const r = await checkQueueFiles(picked, name);
+    if ('error' in r) {
+      setError(r.error);
+      setPending(r.files ?? null);
+      if (r.files) nameInput.current?.focus();
       return;
     }
     setError(null);
-    if (!name.trim() && !(await hasAccountData(files).catch(() => false))) {
-      setPending(files);
-      setError('Dai un nome a questa analisi (es. il nome della persona), poi premi “Continua”. Con lo ZIP “Dati dell’account” il nome lo prendo da lì.');
-      nameInput.current?.focus();
-      return;
-    }
     setPending(null);
-    set({ status: 'importing', importStep: 'Preparazione…' });
     try {
-      const out = await importFiles(files, (s) => set({ importStep: s }), { mode: 'replace', name, newAnalysis: true });
-      // No full history yet → land on the overview, where a banner asks for the missing package.
-      navigate(out.historyKind === 'extended' ? routes.story() : routes.overview());
+      await enqueue(name, r.files);
+      setName('');
+      if (useApp.getState().status !== 'importing') await startQueue();
     } catch (e) {
       console.error(e);
       setError(e instanceof Error ? e.message : String(e));
-      set({ status: 'empty' });
     }
+  };
+
+  const startQueue = async () => {
+    const ok = await importNextQueued();
+    if (!ok && useApp.getState().queue.some((q) => q.error)) setError('Un’analisi in coda non è stata importata: vedi l’errore nella coda.');
   };
 
   const importing = status === 'importing';
@@ -117,7 +119,6 @@ export function Onboarding() {
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && pending && name.trim() && void handle(pending)}
-                disabled={importing}
                 placeholder="es. Gianvito 2025 (facoltativo con lo ZIP “Dati dell’account”)"
                 aria-label="Nome dell’analisi"
                 className="h-10 min-w-0 rounded-full border border-border bg-surface-1 px-4 text-sm text-text placeholder:text-text-faint"
@@ -127,8 +128,8 @@ export function Onboarding() {
               role="button"
               tabIndex={0}
               aria-label="Carica il file ZIP di Spotify"
-              onClick={() => !importing && input.current?.click()}
-              onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && !importing && input.current?.click()}
+              onClick={() => input.current?.click()}
+              onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && input.current?.click()}
               onDragOver={(e) => {
                 e.preventDefault();
                 setDrag(true);
@@ -137,7 +138,7 @@ export function Onboarding() {
               onDrop={(e) => {
                 e.preventDefault();
                 setDrag(false);
-                if (!importing) void handle(e.dataTransfer.files);
+                void handle(e.dataTransfer.files);
               }}
               className={cx(
                 'relative flex aspect-[4/5] cursor-pointer flex-col items-center justify-center gap-4 overflow-hidden rounded-[2rem] border-2 border-dashed p-8 text-center transition-colors',
@@ -156,6 +157,7 @@ export function Onboarding() {
                   <div className="num max-w-xs truncate text-sm text-text-muted" aria-live="polite">
                     {step}
                   </div>
+                  <div className="text-xs text-text-faint">Puoi trascinare qui lo ZIP di un’altra persona: va in coda.</div>
                 </>
               ) : (
                 <>
@@ -163,6 +165,7 @@ export function Onboarding() {
                     <Upload size={26} />
                   </div>
                   <div className="text-xl font-medium">Trascina qui uno o entrambi gli ZIP</div>
+                  <div className="text-xs text-text-faint">Altre persone? Un nome e un trascinamento per volta: si mettono in coda.</div>
                   <div className="text-sm text-text-muted">Cronologia estesa e/o Dati dell’account · accetta anche i file .json</div>
                   <Button variant="secondary" className="mt-2" tabIndex={-1}>
                     Scegli file
@@ -183,12 +186,26 @@ export function Onboarding() {
                 <ErrorNote>{error}</ErrorNote>
               </div>
             )}
-            {pending && !importing && (
+            {pending && (
               <div className="mt-3 flex flex-wrap items-center gap-2 text-sm text-text-muted">
                 <span className="min-w-0 flex-1 truncate">In attesa: {pending.map((f) => f.name).join(', ')}</span>
                 <Button variant="primary" size="sm" disabled={!name.trim()} onClick={() => void handle(pending)}>
                   Continua
                 </Button>
+              </div>
+            )}
+            {queued > 0 && (
+              <div className="mt-5">
+                <div className="mb-2 flex items-center justify-between gap-2 text-sm">
+                  <span className="font-medium text-text">In coda</span>
+                  {!importing && waiting > 0 && (
+                    <Button variant="secondary" size="sm" onClick={() => void startQueue()}>
+                      Avvia coda
+                    </Button>
+                  )}
+                </div>
+                <p className="mb-2 text-xs text-text-muted">Una alla volta: la prossima parte quando l’arricchimento della precedente è finito.</p>
+                <QueueList />
               </div>
             )}
             <div className="mt-6 grid grid-cols-3 gap-3 text-xs text-text-muted">

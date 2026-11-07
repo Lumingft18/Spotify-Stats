@@ -1,6 +1,7 @@
 import { useEffect, lazy, Suspense } from 'react';
 import { prewarm, restore } from './data/db';
-import { afterDataLoaded } from './data/lifecycle';
+import { afterDataLoaded, importNextQueued } from './data/lifecycle';
+import { refreshQueue, takeAutoStart } from './lib/importQueue';
 import { useApp, getApp } from './lib/store';
 import { apiAvailable } from './lib/api';
 import { analyses, currentAnalysisId, setCurrentAnalysis } from './lib/analyses';
@@ -87,6 +88,8 @@ async function boot() {
     return;
   }
   await migrateLegacy().catch((e) => console.warn('migrazione dati del browser', e));
+  const autoStart = takeAutoStart();
+  await refreshQueue();
   const id = currentAnalysisId();
   if (id) {
     const a = await analyses.get(id).catch(() => null);
@@ -99,6 +102,8 @@ async function boot() {
     }
   }
   getApp().set({ status: 'empty' });
+  // Previous person finished enriching: import the next one in the queue.
+  if (autoStart) await importNextQueued();
 }
 
 export default function App() {

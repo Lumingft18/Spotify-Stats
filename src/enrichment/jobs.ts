@@ -3,12 +3,14 @@ import type { MetaRow } from '../data/schema';
 import { kv } from '../lib/kv';
 import { getApp, type ConnectionId } from '../lib/store';
 import { sleep } from './net';
-import { cacheCatalog, clearTriedShared, readTried, writeTried } from '../lib/catalogCache';
+import { cacheCatalog, clearTriedShared, readCatalog, readTried, writeTried } from '../lib/catalogCache';
 import { autoMoodAi, stopMoodAi } from './moodAi';
 import { autoEmbeddings, stopEmbeddings } from './embedAi';
 import { isEnrichmentHeld } from './pause';
 import { applyMoodAdjustments } from '../data/moodAdjust';
 import { markCompleteIfDone, markWork } from './completion';
+import { advanceQueue, queueActiveId } from '../lib/importQueue';
+import { currentAnalysisId } from '../lib/analyses';
 import { fetchArtistTagsMB, fetchAudioFeatures, fetchCover, fetchLyrics, fetchTags, type TrackRef } from './providers';
 
 export type StepId = 'covers' | 'audiofeatures' | 'lyrics' | 'tags';
@@ -304,9 +306,40 @@ async function migrateTried() {
   await kv.set('tried_version', 2);
 }
 
+/** Copies public catalog hits into this analysis' meta before network steps.
+ *  Without this, shared "tried" skips the fetch but leaves meta empty (mood/map lose those songs). */
+async function seedFromCatalog(): Promise<void> {
+  const missing = await query<{ uri: string }>(`
+    SELECT t.uri FROM tracks t LEFT JOIN meta m USING (uri)
+    WHERE t.plays > 0 AND t.uri LIKE 'spotify:track:%'
+      AND (m.uri IS NULL OR m.cover IS NULL OR m.lyrics IS NULL OR m.tags IS NULL
+           OR m.mood_source IS NULL OR m.valence IS NULL)`);
+  if (!missing.length) return;
+  const cat = await readCatalog(missing.map((r) => r.uri)).catch(() => [] as MetaRow[]);
+  if (!cat.length) return;
+  const rows: MetaRow[] = [];
+  for (const c of cat) {
+    const row: MetaRow = { uri: c.uri };
+    let useful = false;
+    for (const k of ['cover', 'valence', 'energy', 'danceability', 'tempo', 'acousticness', 'mood_source', 'mood_conf', 'lyrics', 'tags'] as const) {
+      if (c[k] != null && c[k] !== '') {
+        row[k] = c[k];
+        useful = true;
+      }
+    }
+    if (useful) rows.push(row);
+  }
+  if (!rows.length) return;
+  for (let i = 0; i < rows.length; i += 3000) await upsertMeta(rows.slice(i, i + 3000), false);
+  await persistMeta();
+}
+
 /** Starts every enabled step in parallel (different hosts → no shared rate limit). */
 export function runAllEnabled() {
-  void migrateTried().then(runAllEnabledNow);
+  void migrateTried()
+    .then(() => seedFromCatalog())
+    .then(runAllEnabledNow)
+    .catch((e) => console.warn('avvio attività', e));
 }
 
 function runAllEnabledNow() {
@@ -325,6 +358,14 @@ function runAllEnabledNow() {
     .then(() => Promise.all([autoMoodAi(), autoEmbeddings()]))
     .then(() => covers)
     .then(() => markCompleteIfDone())
+    .then((complete) => {
+      // A few lookups that keep failing must not stall the queue: the automatic run ended by itself
+      // (nothing running, nothing paused by hand, not on hold) → next person. Reopening resumes the rest.
+      if (complete || isEnrichmentHeld() || queueActiveId() !== currentAnalysisId()) return;
+      const jobs = Object.values(getApp().jobs);
+      if (jobs.some((j) => j.status === 'running' || j.status === 'paused')) return;
+      return advanceQueue().then(() => undefined);
+    })
     .catch((e) => console.warn('completamento analisi', e));
 }
 

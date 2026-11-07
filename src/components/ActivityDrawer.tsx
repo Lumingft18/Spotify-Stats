@@ -1,9 +1,12 @@
-import { Pause, Play, X, CheckCircle2, AlertCircle } from 'lucide-react';
+import { Pause, Play, X, CheckCircle2, AlertCircle, PlugZap } from 'lucide-react';
+import { useEffect, useState } from 'react';
 import { useApp } from '../lib/store';
 import { runStep, stopStep, STEPS, type StepId } from '../enrichment/jobs';
 import { MOOD_AI_JOB, moodAiAvailable, startMoodAi, stopMoodAi } from '../enrichment/moodAi';
 import { EMBED_JOB, embeddingsAvailable, startEmbeddings, stopEmbeddings } from '../enrichment/embedAi';
+import { fetchAwakeStatus, type AwakeInfo } from '../enrichment/keepAwake';
 import { Button, cx, Meter } from './ui';
+import { QueueSection } from './ImportQueue';
 import { fmtInt } from '../lib/format';
 
 const PER_ITEM_SECONDS: Partial<Record<StepId, number>> = { lyrics: 0.45, tags: 1.3, covers: 0.35 };
@@ -19,6 +22,19 @@ export function ActivityDrawer() {
   const jobs = useApp((s) => s.jobs);
   const settings = useApp((s) => s.settings);
   const set = useApp((s) => s.set);
+  const [awake, setAwake] = useState<AwakeInfo | null>(null);
+  const running = Object.values(jobs).some((j) => j.status === 'running');
+  useEffect(() => {
+    if (!open) return;
+    let live = true;
+    const pull = () => void fetchAwakeStatus().then((s) => live && setAwake(s));
+    pull();
+    const t = setInterval(pull, 15_000);
+    return () => {
+      live = false;
+      clearInterval(t);
+    };
+  }, [open, running]);
   if (!open) return null;
   const steps = Object.keys(STEPS) as StepId[];
   const extra = Object.values(jobs).filter((j) => !(j.id in STEPS));
@@ -40,6 +56,19 @@ export function ActivityDrawer() {
             <X size={20} />
           </button>
         </div>
+        {running && awake?.supported && (
+          <div className={cx('flex items-start gap-2 rounded-2xl border px-3 py-2.5 text-xs', awake.holding ? 'border-good/40 bg-good/10 text-text' : 'border-border bg-surface-2/60 text-text-muted')}>
+            <PlugZap size={14} className="mt-0.5 shrink-0" />
+            <span>
+              {awake.holding
+                ? 'Collegato alla corrente: Mac non va in standby da solo finché le attività girano.'
+                : awake.onAC
+                  ? 'Attendo blocco standby…'
+                  : 'Su batteria il Mac può andare in standby e congelare le attività. Collega l’alimentatore.'}
+            </span>
+          </div>
+        )}
+        <QueueSection />
         {steps.map((id) => {
           const d = STEPS[id];
           const j = jobs[id];

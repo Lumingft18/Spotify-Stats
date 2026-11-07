@@ -1,6 +1,8 @@
 // Local API on the Vite server (dev and `vite preview`): the app's persistent database.
 //
 //   GET    /api/health
+//   GET    /api/awake                          { wanted, holding, onAC, supported }
+//   POST   /api/awake               {hold}     caffeinate while enrichment runs (AC power only on macOS)
 //   GET    /api/analyses                       history of analyses (most recently opened first)
 //   POST   /api/analyses            {name}     new analysis
 //   PATCH  /api/analyses/:id        {name?, history_kind?, rows?, first_day?, last_day?, display_name?, opened?}
@@ -29,6 +31,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { resolve } from 'node:path'
 import type { Connect, Plugin } from 'vite'
 import { pack, unpack } from '../src/lib/pack'
+import { getAwakeStatus, setAwakeWanted, shutdownAwake } from './awake'
 import { HttpError, Store, type CatalogRow } from './store'
 
 const IMG_HOSTS = /^(i\.scdn\.co|mosaic\.scdn\.co|[a-z0-9-]+\.spotifycdn\.com)$/i
@@ -135,6 +138,14 @@ export function createHandler(store: Store): Connect.NextHandleFunction {
     void (async () => {
       const [a, b, c, d, e] = parts
       if (a === 'health') return sendJson(res, 200, { ok: true })
+
+      if (a === 'awake') {
+        if (m === 'GET') return sendJson(res, 200, getAwakeStatus())
+        if (m === 'POST') {
+          const body = await json<{ hold?: boolean }>(req)
+          return sendJson(res, 200, await setAwakeWanted(!!body.hold))
+        }
+      }
 
       if (a === 'analyses') {
         if (!b) {
@@ -264,12 +275,16 @@ export function apiServer(): Plugin {
     configureServer(s) {
       mount(s.middlewares)
       s.httpServer?.once('close', () => {
+        shutdownAwake()
         store?.close()
         store = null
       })
     },
     configurePreviewServer(s) {
       mount(s.middlewares)
+      s.httpServer?.once('close', () => {
+        shutdownAwake()
+      })
     },
   }
 }
