@@ -635,7 +635,7 @@ function Report({ r, name, range, today }: { r: ReportData; name: string | null;
             )}
             {f.night?.track && (
               <div className="doc-moment">
-                <Thumb name={f.night.track} size={40} />
+                <Thumb src={f.night.cover} name={f.night.track} size={40} />
                 <div className="min-w-0">
                   <div className="doc-kicker">Di notte</div>
                   <div className="doc-strong doc-trunc">{f.night.track}</div>
@@ -645,7 +645,7 @@ function Report({ r, name, range, today }: { r: ReportData; name: string | null;
             )}
             {f.firstTrack && (
               <div className="doc-moment">
-                <Thumb name={f.firstTrack.track} size={40} />
+                <Thumb src={f.firstTrack.cover} name={f.firstTrack.track} size={40} />
                 <div className="min-w-0">
                   <div className="doc-kicker">Primo brano</div>
                   <div className="doc-strong doc-trunc">{f.firstTrack.track}</div>
@@ -655,7 +655,7 @@ function Report({ r, name, range, today }: { r: ReportData; name: string | null;
             )}
             {f.lastTrack && (
               <div className="doc-moment">
-                <Thumb name={f.lastTrack.track} size={40} />
+                <Thumb src={f.lastTrack.cover} name={f.lastTrack.track} size={40} />
                 <div className="min-w-0">
                   <div className="doc-kicker">Ultimo brano</div>
                   <div className="doc-strong doc-trunc">{f.lastTrack.track}</div>

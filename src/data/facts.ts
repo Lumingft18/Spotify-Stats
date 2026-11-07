@@ -69,9 +69,9 @@ export interface Facts {
   marathon: { start: string; minutes: number; tracks: number } | null;
   obsession: { track: string; artist: string; cover: string | null; day: string; n: number } | null;
   comeback: { track: string; artist: string; cover: string | null; day: string; gap: number } | null;
-  night: { share: number; track: string | null; artist: string | null } | null;
-  firstTrack: { track: string; artist: string; day: string } | null;
-  lastTrack: { track: string; artist: string; day: string } | null;
+  night: { share: number; track: string | null; artist: string | null; cover: string | null } | null;
+  firstTrack: { track: string; artist: string; cover: string | null; day: string } | null;
+  lastTrack: { track: string; artist: string; cover: string | null; day: string } | null;
   weekendShare: number;
 }
 
@@ -190,14 +190,19 @@ export async function loadFacts(w: string, year: number): Promise<Facts | null> 
       SELECT p.track, p.artist, m.cover, p.day::VARCHAR AS day, s.days_since_last AS gap
       FROM plays p JOIN plays_seq s USING (id) LEFT JOIN meta m USING (uri)
       WHERE ${w} AND p.counted AND s.days_since_last IS NOT NULL ORDER BY s.days_since_last DESC LIMIT 1`),
-    query<{ share: number; track: string | null; artist: string | null }>(`
-      SELECT sum(minutes) FILTER (WHERE hour < 5) / nullif(sum(minutes), 0) AS share,
-             arg_max(track, minutes) FILTER (WHERE hour < 5) AS track, arg_max(artist, minutes) FILTER (WHERE hour < 5) AS artist
-      FROM plays p WHERE ${w}`),
-    query<{ ft: string; fa: string; fd: string; lt: string; la: string; ld: string }>(`
-      SELECT arg_min(track, ts) AS ft, arg_min(artist, ts) AS fa, min(day)::VARCHAR AS fd,
-             arg_max(track, ts) AS lt, arg_max(artist, ts) AS la, max(day)::VARCHAR AS ld
-      FROM plays p WHERE ${w} AND counted`),
+    query<{ share: number; track: string | null; artist: string | null; cover: string | null }>(`
+      WITH n AS (
+        SELECT sum(minutes) FILTER (WHERE hour < 5) / nullif(sum(minutes), 0) AS share,
+               arg_max(track, minutes) FILTER (WHERE hour < 5) AS track, arg_max(artist, minutes) FILTER (WHERE hour < 5) AS artist,
+               arg_max(uri, minutes) FILTER (WHERE hour < 5) AS uri
+        FROM plays p WHERE ${w})
+      SELECT n.share, n.track, n.artist, m.cover FROM n LEFT JOIN meta m USING (uri)`),
+    query<{ ft: string; fa: string; fd: string; fc: string | null; lt: string; la: string; ld: string; lc: string | null }>(`
+      WITH x AS (
+        SELECT arg_min(track, ts) AS ft, arg_min(artist, ts) AS fa, arg_min(uri, ts) AS fu, min(day)::VARCHAR AS fd,
+               arg_max(track, ts) AS lt, arg_max(artist, ts) AS la, arg_max(uri, ts) AS lu, max(day)::VARCHAR AS ld
+        FROM plays p WHERE ${w} AND counted)
+      SELECT x.*, (SELECT cover FROM meta WHERE uri = x.fu) AS fc, (SELECT cover FROM meta WHERE uri = x.lu) AS lc FROM x`),
   ]);
 
   const known = moodRows.filter((r) => r.mood !== 'sconosciuto');
@@ -243,8 +248,8 @@ export async function loadFacts(w: string, year: number): Promise<Facts | null> 
     obsession: obsession[0] && obsession[0].n > 1 ? obsession[0] : null,
     comeback: comeback[0] && comeback[0].gap >= 60 ? comeback[0] : null,
     night: night[0]?.share ? night[0] : null,
-    firstTrack: fl?.ft ? { track: fl.ft, artist: fl.fa, day: fl.fd } : null,
-    lastTrack: fl?.lt ? { track: fl.lt, artist: fl.la, day: fl.ld } : null,
+    firstTrack: fl?.ft ? { track: fl.ft, artist: fl.fa, cover: fl.fc ?? null, day: fl.fd } : null,
+    lastTrack: fl?.lt ? { track: fl.lt, artist: fl.la, cover: fl.lc ?? null, day: fl.ld } : null,
     weekendShare: k.weekend ?? 0,
   };
 }
