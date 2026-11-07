@@ -4,7 +4,7 @@ import { useApp } from '../../lib/store';
 import { importNextQueued } from '../../data/lifecycle';
 import { checkQueueFiles, enqueue } from '../../lib/importQueue';
 import { Button, ErrorNote, Spinner, cx } from '../../components/ui';
-import { QueueList } from '../../components/ImportQueue';
+import { IncompleteBanner, QueueList } from '../../components/ImportQueue';
 import { SavedAnalyses } from './SavedAnalyses';
 
 export function Onboarding() {
@@ -221,6 +221,11 @@ export function Onboarding() {
             </div>
           </div>
         </div>
+        {!importing && (
+          <div className="mb-4">
+            <IncompleteBanner />
+          </div>
+        )}
         <SavedAnalyses />
       </div>
     </div>

@@ -8,7 +8,7 @@ import { readCatalog } from '../lib/catalogCache';
 import { runAllEnabled } from '../enrichment/jobs';
 import { analyses, currentAnalysisId, setCurrentAnalysis } from '../lib/analyses';
 import { applyMoodAdjustments } from './moodAdjust';
-import { processNext } from '../lib/importQueue';
+import { processNext, setQueueActive } from '../lib/importQueue';
 import { navigate, routes } from '../lib/router';
 
 /** Re-applies cached public metadata (covers, audio features) to the loaded tracks — no network needed. */
@@ -56,6 +56,9 @@ async function syncAnalysisMeta(
     display_name: profile?.displayName ?? profile?.username ?? null,
   });
   getApp().set({ analysis: a });
+  // Still to enrich → part of the automatic chain: when it's done, the next import / incomplete analysis opens.
+  // Complete ones aren't, so browsing an old analysis never jumps away.
+  if (!a.enriched_at) setQueueActive(a.id);
 }
 
 export async function applyRange(from: string | null, to: string | null) {

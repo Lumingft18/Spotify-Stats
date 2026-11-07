@@ -2,7 +2,8 @@
 // The ZIPs are kept in IndexedDB (this browser only) so the queue survives the reload between two analyses.
 // Flow: import the first entry → enrichment runs on it → when it's done the page reloads and imports the next.
 import { getApp } from './store';
-import { leaveAnalysis } from './analyses';
+import { analyses, currentAnalysisId, leaveAnalysis, openAnalysis, type Analysis } from './analyses';
+import { persistMeta } from '../data/db';
 import { hasAccountData } from '../data/import';
 
 export interface QueueEntry {
@@ -80,6 +81,7 @@ export async function refreshQueue(): Promise<QueueItem[]> {
 }
 
 export async function enqueue(name: string, files: File[]): Promise<QueueEntry> {
+  writeSkip([]); // new work: give every analysis another chance in the chain
   const e: QueueEntry = { id: crypto.randomUUID(), name: name.trim(), files, added_at: Date.now() };
   await tx('readwrite', (s) => s.put(e));
   await refreshQueue();
@@ -162,19 +164,57 @@ export function takeAutoStart(): boolean {
   return on;
 }
 
-/**
- * The open analysis is done (or the person asked to skip ahead): if someone is waiting,
- * go back to a clean start screen and import them. Enrichment of the current one resumes when it's reopened.
- */
-export async function advanceQueue(): Promise<boolean> {
-  setQueueActive(null);
-  if (!(await firstReady())) {
-    await refreshQueue();
-    return false;
+/** Analyses whose automatic run ended without completing (a few lookups keep failing): not reopened by the chain. */
+const SKIP_KEY = 'ss2.autoSkip';
+const readSkip = (): string[] => {
+  try {
+    return JSON.parse(lsGet(SKIP_KEY) ?? '[]') as string[];
+  } catch {
+    return [];
   }
-  lsSet(AUTO_KEY, '1');
-  leaveAnalysis();
-  return true;
+};
+const writeSkip = (ids: string[]) => lsSet(SKIP_KEY, ids.length ? JSON.stringify([...new Set(ids)]) : null);
+
+/** Saved analyses that still need enriching, oldest first (the chain opens them one by one). */
+export async function incompleteAnalyses(exclude: string | null = null): Promise<Analysis[]> {
+  const skip = new Set(readSkip());
+  const list = await analyses.list().catch(() => [] as Analysis[]);
+  return list
+    .filter((a) => !a.enriched_at && (a.rows ?? 0) > 0 && a.id !== exclude && !skip.has(a.id))
+    .sort((a, b) => a.created_at - b.created_at);
+}
+
+/**
+ * The open analysis is done (or its automatic run ended, or the person skipped ahead): move on by itself.
+ * 1. someone waiting in the import queue → clean start screen, import them;
+ * 2. otherwise another saved analysis still to enrich → open it (enrichment resumes there).
+ * Leaving an analysis halfway is fine: it stays in the list and the chain comes back to it.
+ */
+export async function advanceQueue(opts: { incomplete?: boolean } = {}): Promise<boolean> {
+  const cur = currentAnalysisId();
+  if (cur) writeSkip(opts.incomplete ? [...readSkip(), cur] : readSkip().filter((id) => id !== cur));
+  await persistMeta().catch(() => undefined);
+  if (await firstReady()) {
+    setQueueActive(null);
+    lsSet(AUTO_KEY, '1');
+    leaveAnalysis();
+    return true;
+  }
+  const next = (await incompleteAnalyses(cur))[0];
+  if (next) {
+    setQueueActive(next.id);
+    openAnalysis(next.id, '#/');
+    return true;
+  }
+  setQueueActive(null);
+  await refreshQueue();
+  return false;
+}
+
+/** "Complete everything": forget earlier give-ups and start the chain from the start screen. */
+export async function startChain(): Promise<boolean> {
+  writeSkip([]);
+  return advanceQueue();
 }
 
 /** Keeps only Spotify export files; an error when nothing usable or a name is needed. */

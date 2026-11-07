@@ -364,7 +364,7 @@ function runAllEnabledNow() {
       if (complete || isEnrichmentHeld() || queueActiveId() !== currentAnalysisId()) return;
       const jobs = Object.values(getApp().jobs);
       if (jobs.some((j) => j.status === 'running' || j.status === 'paused')) return;
-      return advanceQueue().then(() => undefined);
+      return advanceQueue({ incomplete: true }).then(() => undefined);
     })
     .catch((e) => console.warn('completamento analisi', e));
 }

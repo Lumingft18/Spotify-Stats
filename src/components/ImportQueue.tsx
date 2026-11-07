@@ -1,7 +1,8 @@
-import { useRef, useState } from 'react';
-import { AlertCircle, FileArchive, Plus, SkipForward, X } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { AlertCircle, FileArchive, Plus, SkipForward, Wand2, X } from 'lucide-react';
 import { useApp } from '../lib/store';
-import { advanceQueue, checkQueueFiles, dequeue, enqueue, queueActiveId, setQueueActive } from '../lib/importQueue';
+import { advanceQueue, checkQueueFiles, dequeue, enqueue, incompleteAnalyses, queueActiveId, setQueueActive, startChain } from '../lib/importQueue';
+import type { Analysis } from '../lib/analyses';
 import { currentAnalysisId } from '../lib/analyses';
 import { Button, ErrorNote } from './ui';
 
@@ -38,6 +39,48 @@ export function QueueList() {
   );
 }
 
+/** Saved analyses still to enrich (excluding the open one); re-read when the queue changes. */
+function useIncomplete(): Analysis[] {
+  const queue = useApp((s) => s.queue);
+  const [list, setList] = useState<Analysis[]>([]);
+  useEffect(() => {
+    let live = true;
+    void incompleteAnalyses(currentAnalysisId()).then((l) => live && setList(l));
+    return () => {
+      live = false;
+    };
+  }, [queue]);
+  return list;
+}
+
+/** Start screen: analyses left halfway (e.g. you came back here while one was enriching). */
+export function IncompleteBanner() {
+  const list = useIncomplete();
+  const [busy, setBusy] = useState(false);
+  if (!list.length) return null;
+  return (
+    <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-border bg-surface-2/60 px-4 py-3 text-sm">
+      <div className="min-w-0 flex-1">
+        <div className="font-medium text-text">
+          {list.length === 1 ? '1 analisi da completare' : `${list.length} analisi da completare`}
+        </div>
+        <div className="truncate text-xs text-text-muted">{list.map((a) => a.name).join(', ')} · le apro una alla volta e passo alla successiva da sola</div>
+      </div>
+      <Button
+        size="sm"
+        variant="primary"
+        disabled={busy}
+        onClick={() => {
+          setBusy(true);
+          void startChain().finally(() => setBusy(false));
+        }}
+      >
+        <Wand2 size={14} /> Completa in automatico
+      </Button>
+    </div>
+  );
+}
+
 /** Activity drawer section: queue + add another person while the current one is being enriched. */
 export function QueueSection() {
   const queue = useApp((s) => s.queue);
@@ -48,6 +91,7 @@ export function QueueSection() {
   const [busy, setBusy] = useState(false);
   const input = useRef<HTMLInputElement>(null);
   const waiting = queue.filter((q) => !q.error && !q.importing).length;
+  const incomplete = useIncomplete();
 
   const add = async (list: FileList | File[] | null) => {
     const picked = Array.from(list ?? []); // copy first: clearing the input empties its live FileList
@@ -77,8 +121,8 @@ export function QueueSection() {
     <div className="rounded-2xl border border-border bg-surface-2/60 p-4">
       <div className="mb-1 font-medium">Coda analisi</div>
       <p className="mb-3 text-xs text-text-muted">
-        Carica gli ZIP di altre persone: vengono importate una alla volta. Quando questa analisi ha finito l’arricchimento passo alla prossima
-        da sola (l’app si ricarica).
+        Carica gli ZIP di altre persone: vengono importate una alla volta. Quando questa analisi ha finito l’arricchimento passo da sola alla
+        prossima (prima le nuove in coda, poi quelle rimaste a metà). L’app si ricarica a ogni passaggio.
       </p>
       <QueueList />
       <div className="mt-3 flex flex-wrap items-center gap-2">
@@ -106,7 +150,12 @@ export function QueueSection() {
           <ErrorNote>{error}</ErrorNote>
         </div>
       )}
-      {waiting > 0 && (
+      {incomplete.length > 0 && (
+        <p className="mt-3 text-xs text-text-muted">
+          Poi completo anche: <span className="text-text">{incomplete.map((a) => a.name).join(', ')}</span>
+        </p>
+      )}
+      {waiting + incomplete.length > 0 && (
         <div className="mt-3 flex items-center justify-between gap-2 text-xs text-text-faint">
           <span>{running ? 'Parte al termine dell’arricchimento in corso.' : 'Nessun arricchimento in corso: premi “Passa ora”.'}</span>
           <Button size="sm" variant="ghost" onClick={() => void advanceQueue()}>
