@@ -2,7 +2,8 @@ import { useRef, useState } from 'react';
 import { Upload, ShieldCheck, Mail, FileArchive, Sparkles, Cpu } from 'lucide-react';
 import { useApp } from '../../lib/store';
 import { importNextQueued } from '../../data/lifecycle';
-import { checkQueueFiles, enqueue } from '../../lib/importQueue';
+import { chainInProgress, checkQueueFiles, enqueue } from '../../lib/importQueue';
+import { openAnalysis } from '../../lib/analyses';
 import { Button, ErrorNote, Spinner, cx } from '../../components/ui';
 import { IncompleteBanner, QueueList } from '../../components/ImportQueue';
 import { SavedAnalyses } from './SavedAnalyses';
@@ -21,7 +22,7 @@ export function Onboarding() {
   const input = useRef<HTMLInputElement>(null);
   const nameInput = useRef<HTMLInputElement>(null);
 
-  /** Every drop is one person: it joins the queue, and the queue starts if nothing is being imported. */
+  /** Every drop is one person: it joins the queue, and the queue starts if nothing is being imported or enriched. */
   const handle = async (list: FileList | File[] | null) => {
     const picked = Array.from(list ?? []); // copy first: clearing the input empties its live FileList
     if (input.current) input.current.value = ''; // the same file can be chosen again
@@ -37,7 +38,10 @@ export function Onboarding() {
     try {
       await enqueue(name, r.files);
       setName('');
-      if (useApp.getState().status !== 'importing') await startQueue();
+      // Already importing, or someone halfway through enrichment: the new person waits their turn
+      // (the banner below resumes the chain by itself).
+      if (useApp.getState().status === 'importing' || (await chainInProgress())) return;
+      await startQueue();
     } catch (e) {
       console.error(e);
       setError(e instanceof Error ? e.message : String(e));
@@ -45,6 +49,9 @@ export function Onboarding() {
   };
 
   const startQueue = async () => {
+    // Someone is halfway through enrichment: they finish first, the new person waits their turn.
+    const active = await chainInProgress();
+    if (active) return openAnalysis(active.id, '#/');
     const ok = await importNextQueued();
     if (!ok && useApp.getState().queue.some((q) => q.error)) setError('Un’analisi in coda non è stata importata: vedi l’errore nella coda.');
   };

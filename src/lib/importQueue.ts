@@ -81,7 +81,7 @@ export async function refreshQueue(): Promise<QueueItem[]> {
 }
 
 export async function enqueue(name: string, files: File[]): Promise<QueueEntry> {
-  writeSkip([]); // new work: give every analysis another chance in the chain
+  writeTries({}); // new work: give every analysis another chance in the chain
   const e: QueueEntry = { id: crypto.randomUUID(), name: name.trim(), files, added_at: Date.now() };
   await tx('readwrite', (s) => s.put(e));
   await refreshQueue();
@@ -164,24 +164,51 @@ export function takeAutoStart(): boolean {
   return on;
 }
 
-/** Analyses whose automatic run ended without completing (a few lookups keep failing): not reopened by the chain. */
-const SKIP_KEY = 'ss2.autoSkip';
-const readSkip = (): string[] => {
+/**
+ * Automatic runs that ended without completing (a few lookups keep failing, a step errored), per analysis.
+ * The chain keeps coming back to an analysis until it completes, up to MAX_TRIES runs that ended short.
+ */
+const TRIES_KEY = 'ss2.autoTries';
+const MAX_TRIES = 3;
+const readTries = (): Record<string, number> => {
   try {
-    return JSON.parse(lsGet(SKIP_KEY) ?? '[]') as string[];
+    return JSON.parse(lsGet(TRIES_KEY) ?? '{}') as Record<string, number>;
   } catch {
-    return [];
+    return {};
   }
 };
-const writeSkip = (ids: string[]) => lsSet(SKIP_KEY, ids.length ? JSON.stringify([...new Set(ids)]) : null);
+const writeTries = (t: Record<string, number>) => lsSet(TRIES_KEY, Object.keys(t).length ? JSON.stringify(t) : null);
 
 /** Saved analyses that still need enriching, oldest first (the chain opens them one by one). */
 export async function incompleteAnalyses(exclude: string | null = null): Promise<Analysis[]> {
-  const skip = new Set(readSkip());
+  const tries = readTries();
   const list = await analyses.list().catch(() => [] as Analysis[]);
   return list
-    .filter((a) => !a.enriched_at && (a.rows ?? 0) > 0 && a.id !== exclude && !skip.has(a.id))
+    .filter((a) => !a.enriched_at && (a.rows ?? 0) > 0 && a.id !== exclude && (tries[a.id] ?? 0) < MAX_TRIES)
     .sort((a, b) => a.created_at - b.created_at);
+}
+
+/**
+ * The analysis the chain is working on, when it is still incomplete: leaving it for the start screen doesn't end
+ * its turn, so a new ZIP added meanwhile waits in the queue instead of taking its place.
+ */
+export async function chainInProgress(): Promise<Analysis | null> {
+  const id = queueActiveId();
+  if (!id) return null;
+  const a = await analyses.get(id).catch(() => null);
+  if (!a || a.enriched_at || (readTries()[a.id] ?? 0) >= MAX_TRIES) {
+    setQueueActive(null);
+    return null;
+  }
+  return a;
+}
+
+/** Someone waiting in the import queue (not failed)? */
+export const hasWaiting = async () => !!(await firstReady());
+
+/** Is there anything for the chain to do (someone waiting, an analysis to resume or to complete)? */
+export async function chainHasWork(): Promise<boolean> {
+  return !!(await firstReady()) || !!(await chainInProgress()) || (await incompleteAnalyses()).length > 0;
 }
 
 /**
@@ -192,7 +219,12 @@ export async function incompleteAnalyses(exclude: string | null = null): Promise
  */
 export async function advanceQueue(opts: { incomplete?: boolean } = {}): Promise<boolean> {
   const cur = currentAnalysisId();
-  if (cur) writeSkip(opts.incomplete ? [...readSkip(), cur] : readSkip().filter((id) => id !== cur));
+  if (cur) {
+    const tries = readTries();
+    if (opts.incomplete) tries[cur] = (tries[cur] ?? 0) + 1;
+    else delete tries[cur];
+    writeTries(tries);
+  }
   await persistMeta().catch(() => undefined);
   if (await firstReady()) {
     setQueueActive(null);
@@ -200,7 +232,9 @@ export async function advanceQueue(opts: { incomplete?: boolean } = {}): Promise
     leaveAnalysis();
     return true;
   }
-  const next = (await incompleteAnalyses(cur))[0];
+  // Fewest failed runs first: an analysis that keeps ending short doesn't hold the others back.
+  const tries = readTries();
+  const next = (await incompleteAnalyses(cur)).sort((a, b) => (tries[a.id] ?? 0) - (tries[b.id] ?? 0))[0];
   if (next) {
     setQueueActive(next.id);
     openAnalysis(next.id, '#/');
@@ -211,10 +245,20 @@ export async function advanceQueue(opts: { incomplete?: boolean } = {}): Promise
   return false;
 }
 
+/** Start screen: continue the chain (the analysis it was on first, then the queue, then the rest). */
+export async function resumeChain(): Promise<boolean> {
+  const active = await chainInProgress();
+  if (active) {
+    openAnalysis(active.id, '#/');
+    return true;
+  }
+  return advanceQueue();
+}
+
 /** "Complete everything": forget earlier give-ups and start the chain from the start screen. */
 export async function startChain(): Promise<boolean> {
-  writeSkip([]);
-  return advanceQueue();
+  writeTries({});
+  return resumeChain();
 }
 
 /** Keeps only Spotify export files; an error when nothing usable or a name is needed. */

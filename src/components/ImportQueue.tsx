@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { AlertCircle, FileArchive, Plus, SkipForward, Wand2, X } from 'lucide-react';
 import { useApp } from '../lib/store';
-import { advanceQueue, checkQueueFiles, dequeue, enqueue, incompleteAnalyses, queueActiveId, setQueueActive, startChain } from '../lib/importQueue';
+import { advanceQueue, chainInProgress, checkQueueFiles, dequeue, enqueue, incompleteAnalyses, resumeChain, setQueueActive } from '../lib/importQueue';
+import { isAutoRunActive } from '../enrichment/jobs';
 import type { Analysis } from '../lib/analyses';
 import { currentAnalysisId } from '../lib/analyses';
 import { Button, ErrorNote } from './ui';
@@ -53,29 +54,81 @@ function useIncomplete(): Analysis[] {
   return list;
 }
 
-/** Start screen: analyses left halfway (e.g. you came back here while one was enriching). */
+/** Seconds on the start screen before the chain carries on by itself (time to add more ZIPs first). */
+const AUTO_RESUME_S = 15;
+
+/**
+ * Start screen: the chain has work left (someone halfway through enrichment, people in the queue, analyses
+ * left incomplete) → it carries on by itself after a short countdown. The countdown waits while you type a
+ * name or pick files, and “Non ora” stops it for this visit.
+ */
 export function IncompleteBanner() {
-  const list = useIncomplete();
+  const queue = useApp((s) => s.queue);
+  const status = useApp((s) => s.status);
+  const [plan, setPlan] = useState<{ title: string; names: string[] } | null>(null);
+  const [left, setLeft] = useState(AUTO_RESUME_S);
+  const [stopped, setStopped] = useState(false);
   const [busy, setBusy] = useState(false);
-  if (!list.length) return null;
+
+  useEffect(() => {
+    let live = true;
+    void (async () => {
+      const active = await chainInProgress();
+      const waiting = queue.filter((q) => !q.error && !q.importing).map((q) => q.name || 'nome dallo ZIP');
+      const rest = (await incompleteAnalyses(active?.id ?? null)).map((a) => a.name);
+      const names = [...(active ? [active.name] : []), ...waiting, ...rest];
+      const title = active
+        ? `Riprendo ${active.name}`
+        : waiting.length
+          ? `Importo ${waiting[0]}`
+          : rest.length === 1
+            ? '1 analisi da completare'
+            : `${rest.length} analisi da completare`;
+      if (live) setPlan(names.length ? { title, names } : null);
+    })();
+    return () => {
+      live = false;
+    };
+  }, [queue]);
+
+  const go = () => {
+    setBusy(true);
+    void resumeChain().finally(() => setBusy(false));
+  };
+
+  const armed = !!plan && !stopped && !busy && status === 'empty';
+  useEffect(() => {
+    if (!armed) return;
+    let n = AUTO_RESUME_S;
+    const t = setInterval(() => {
+      // Typing a name or choosing files: wait for it.
+      const el = document.activeElement;
+      n = el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement ? AUTO_RESUME_S : n - 1;
+      setLeft(n);
+      if (n > 0) return;
+      clearInterval(t);
+      go();
+    }, 1000);
+    return () => clearInterval(t);
+  }, [armed]);
+
+  if (!plan) return null;
   return (
     <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-border bg-surface-2/60 px-4 py-3 text-sm">
       <div className="min-w-0 flex-1">
         <div className="font-medium text-text">
-          {list.length === 1 ? '1 analisi da completare' : `${list.length} analisi da completare`}
+          {plan.title}
+          {armed && <span className="num font-normal text-text-muted"> tra {Math.max(left, 0)} s</span>}
         </div>
-        <div className="truncate text-xs text-text-muted">{list.map((a) => a.name).join(', ')} · le apro una alla volta e passo alla successiva da sola</div>
+        <div className="truncate text-xs text-text-muted">{plan.names.join(', ')} · una alla volta, passo alla successiva da sola</div>
       </div>
-      <Button
-        size="sm"
-        variant="primary"
-        disabled={busy}
-        onClick={() => {
-          setBusy(true);
-          void startChain().finally(() => setBusy(false));
-        }}
-      >
-        <Wand2 size={14} /> Completa in automatico
+      {armed && (
+        <Button size="sm" variant="ghost" onClick={() => setStopped(true)}>
+          Non ora
+        </Button>
+      )}
+      <Button size="sm" variant="primary" disabled={busy} onClick={go}>
+        <Wand2 size={14} /> {stopped ? 'Completa in automatico' : 'Vai ora'}
       </Button>
     </div>
   );
@@ -105,8 +158,10 @@ export function QueueSection() {
         return;
       }
       await enqueue(name, r.files);
-      // The open analysis hands over to the queue when its enrichment ends.
-      if (!queueActiveId()) setQueueActive(currentAnalysisId());
+      // Enrichment still going: the open analysis hands over to the queue when it ends.
+      // Nothing left running here: the new person starts right away.
+      if (isAutoRunActive()) setQueueActive(currentAnalysisId());
+      else await advanceQueue();
       setName('');
       setPending(null);
       setError(null);
@@ -157,7 +212,7 @@ export function QueueSection() {
       )}
       {waiting + incomplete.length > 0 && (
         <div className="mt-3 flex items-center justify-between gap-2 text-xs text-text-faint">
-          <span>{running ? 'Parte al termine dell’arricchimento in corso.' : 'Nessun arricchimento in corso: premi “Passa ora”.'}</span>
+          <span>{running ? 'Parte da sola al termine dell’arricchimento in corso.' : 'Parte da sola a breve.'}</span>
           <Button size="sm" variant="ghost" onClick={() => void advanceQueue()}>
             <SkipForward size={14} /> Passa ora
           </Button>

@@ -9,7 +9,7 @@ import { autoEmbeddings, stopEmbeddings } from './embedAi';
 import { isEnrichmentHeld } from './pause';
 import { applyMoodAdjustments } from '../data/moodAdjust';
 import { markCompleteIfDone, markWork } from './completion';
-import { advanceQueue, queueActiveId } from '../lib/importQueue';
+import { advanceQueue, hasWaiting, queueActiveId } from '../lib/importQueue';
 import { currentAnalysisId } from '../lib/analyses';
 import { fetchArtistTagsMB, fetchAudioFeatures, fetchCover, fetchLyrics, fetchTags, type TrackRef } from './providers';
 
@@ -295,6 +295,7 @@ async function runStepNow(step: StepId, limit: number): Promise<void> {
     if (step === 'audiofeatures') await applyMoodAdjustments();
     job(ctrl.signal.aborted ? 'paused' : 'done');
   } catch (e) {
+    console.warn(`arricchimento: ${d.label}`, e);
     app.setJob({ id: step, label: d.label, done: 0, total: 0, status: 'error', detail: e instanceof Error ? e.message : String(e) });
   } finally {
     controllers.delete(step);
@@ -345,7 +346,15 @@ export function runAllEnabled() {
     .catch((e) => console.warn('avvio attività', e));
 }
 
+/** The automatic run (steps → AI → completion check) is in flight on this page. */
+let autoRun = false;
+export const isAutoRunActive = () => autoRun;
+/** Automatic re-runs after a step ended in error (network hiccup, rate limit): per page load. */
+let errorRetries = 0;
+const MAX_ERROR_RETRIES = 2;
+
 function runAllEnabledNow() {
+  autoRun = true;
   const s = getApp().settings;
   const runs: Array<Promise<void>> = [];
   const covers = s.connections.covers ? runStep('covers') : Promise.resolve();
@@ -357,19 +366,31 @@ function runAllEnabledNow() {
   // AI mood and the taste map need lyrics/tags (their input) and audio features (anchors): they start ONCE,
   // when all of those are in. Starting earlier meant a partial run, then new candidates and a second run.
   // When everything is in, record the analysis as complete (Confronta waits for it).
+  let again = false;
   void Promise.all(runs)
     .then(() => Promise.all([autoMoodAi(), autoEmbeddings()]))
     .then(() => covers)
     .then(() => markCompleteIfDone())
-    .then((complete) => {
-      // A few lookups that keep failing must not stall the queue: the automatic run ended by itself
-      // (nothing running, nothing paused by hand, not on hold) → next person. Reopening resumes the rest.
-      if (complete || isEnrichmentHeld() || queueActiveId() !== currentAnalysisId()) return;
+    .then(async (complete) => {
+      if (complete || isEnrichmentHeld()) return;
+      if (queueActiveId() !== currentAnalysisId() && !(await hasWaiting())) return;
       const jobs = Object.values(getApp().jobs);
       if (jobs.some((j) => j.status === 'running' || j.status === 'paused')) return;
+      // A step that errored out (network, rate limit) gets another go before the chain gives up on this analysis.
+      if (jobs.some((j) => j.status === 'error') && errorRetries < MAX_ERROR_RETRIES) {
+        errorRetries++;
+        again = true;
+        setTimeout(runAllEnabledNow, 30_000 * errorRetries);
+        return;
+      }
+      // A few lookups that keep failing must not stall the queue: the automatic run ended by itself
+      // (nothing running, nothing paused by hand, not on hold) → next person. The chain comes back later.
       return advanceQueue({ incomplete: true }).then(() => undefined);
     })
-    .catch((e) => console.warn('completamento analisi', e));
+    .catch((e) => console.warn('completamento analisi', e))
+    .finally(() => {
+      if (!again) autoRun = false;
+    });
 }
 
 export async function resetTried() {

@@ -4,7 +4,7 @@ import { query } from '../data/db';
 import { analyses, currentAnalysisId, getCompareReturn, openAnalysis, setCompareReturn } from '../lib/analyses';
 import { getApp } from '../lib/store';
 import { pendingCount, type StepId } from './jobs';
-import { advanceQueue, queueActiveId } from '../lib/importQueue';
+import { advanceQueue, hasWaiting, queueActiveId } from '../lib/importQueue';
 
 let workDone = false;
 /** Called when a run actually fetched or estimated something (so a saved comparison may be outdated). */
@@ -44,7 +44,7 @@ export async function markCompleteIfDone(): Promise<boolean> {
     openAnalysis(r.back, r.hash);
     return true;
   }
-  // Imported from the queue: this one is done, move on to the next person.
-  if (queueActiveId() === id) await advanceQueue();
+  // Imported from the queue (or people are waiting): this one is done, move on to the next person.
+  if (queueActiveId() === id || (await hasWaiting())) await advanceQueue();
   return true;
 }
